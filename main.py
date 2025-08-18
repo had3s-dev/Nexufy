@@ -102,7 +102,7 @@ def index(request: Request):
     tags=['Downloader'],
     summary='Download one or more songs from a playlist via the WEB interface',
 )
-def download_web_ui(
+async def download_web_ui(  # Made async
     spotdlc: Spotdl = Depends(get_spotdl),
     url: str = Form(...),
 ):
@@ -117,7 +117,8 @@ def download_web_ui(
     """
     try:
         songs = spotdlc.search([url])
-        spotdlc.download_songs(songs)
+        # Use the correct async method
+        await spotdlc.downloader.download_multiple_songs(songs)
     except Exception as error:
         return f"""
     <div>
@@ -145,7 +146,7 @@ def download_web_ui(
     tags=['Downloader'],
     summary='Download a song or songs from a playlist',
 )
-def download(
+async def download(  # Made async
     url: str,
     spotdlc: Spotdl = Depends(get_spotdl),
 ):
@@ -160,7 +161,8 @@ def download(
     """
     try:
         songs = spotdlc.search([url])
-        spotdlc.download_songs(songs)
+        # Use the correct async method
+        await spotdlc.downloader.download_multiple_songs(songs)
         return {'message': 'Download sucessful'}
     except Exception as error:  # pragma: no cover
         return {'detail': error}
