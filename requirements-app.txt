@@ -6,7 +6,7 @@ beautifulsoup4==4.13.3
 certifi==2025.1.31
 charset-normalizer==3.4.1
 click==8.1.8
-colorama==0.4.6 ; platform_system == 'Windows'
+colorama==0.4.6 ; platform_system == 'Linux'
 dacite==1.9.2
 deprecated==1.2.18
 dnspython==2.7.0
