@@ -1,5 +1,7 @@
 import os
 from functools import lru_cache
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Form
@@ -96,13 +98,19 @@ def index(request: Request):
     return templates.TemplateResponse('index.html', {'request': request})
 
 
+def download_songs_sync(spotdlc, songs):
+    """Synchronous download function to run in thread pool"""
+    for song in songs:
+        spotdlc.downloader.search_and_download(song)
+
+
 @app.post(
     '/download-web',
     response_class=HTMLResponse,
     tags=['Downloader'],
     summary='Download one or more songs from a playlist via the WEB interface',
 )
-async def download_web_ui(  # Made async
+async def download_web_ui(  # Made async again
     spotdlc: Spotdl = Depends(get_spotdl),
     url: str = Form(...),
 ):
@@ -117,8 +125,10 @@ async def download_web_ui(  # Made async
     """
     try:
         songs = spotdlc.search([url])
-        # Use the correct async method
-        await spotdlc.downloader.download_multiple_songs(songs)
+        # Run download in a separate thread to avoid event loop conflicts
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor() as executor:
+            await loop.run_in_executor(executor, download_songs_sync, spotdlc, songs)
     except Exception as error:
         return f"""
     <div>
@@ -146,7 +156,7 @@ async def download_web_ui(  # Made async
     tags=['Downloader'],
     summary='Download a song or songs from a playlist',
 )
-async def download(  # Made async
+async def download(  # Made async again
     url: str,
     spotdlc: Spotdl = Depends(get_spotdl),
 ):
@@ -161,8 +171,10 @@ async def download(  # Made async
     """
     try:
         songs = spotdlc.search([url])
-        # Use the correct async method
-        await spotdlc.downloader.download_multiple_songs(songs)
+        # Run download in a separate thread to avoid event loop conflicts
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor() as executor:
+            await loop.run_in_executor(executor, download_songs_sync, spotdlc, songs)
         return {'message': 'Download sucessful'}
     except Exception as error:  # pragma: no cover
         return {'detail': error}
