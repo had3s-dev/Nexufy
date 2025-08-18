@@ -31,11 +31,8 @@ RUN sed -i 's/\r$//g' entrypoint.sh && chmod +x entrypoint.sh
 # Step 2: Install Python dependencies
 RUN pip install --no-cache-dir --root-user-action ignore -r requirements-app.txt
 
-# Step 3: Download ffmpeg via spotdl
-RUN spotdl --download-ffmpeg
-
-# Step 4: Copy ffmpeg to working directory
-RUN cp /root/.spotdl/ffmpeg /downtify
+# Step 3: Create symbolic link to system ffmpeg (already installed via apt)
+RUN ln -s /usr/bin/ffmpeg /downtify/ffmpeg
 
 ENV UID=1000
 ENV GID=1000
