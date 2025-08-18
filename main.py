@@ -97,7 +97,7 @@ def index(request: Request):
 
 
 @app.post(
-    '/download-web/',
+    '/download-web',
     response_class=HTMLResponse,
     tags=['Downloader'],
     summary='Download one or more songs from a playlist via the WEB interface',
