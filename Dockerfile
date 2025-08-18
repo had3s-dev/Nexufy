@@ -31,8 +31,13 @@ RUN sed -i 's/\r$//g' entrypoint.sh && chmod +x entrypoint.sh
 # Step 2: Install Python dependencies
 RUN pip install --no-cache-dir --root-user-action ignore -r requirements-app.txt
 
-# Step 3: Create symbolic link to system ffmpeg (already installed via apt)
-RUN ln -s /usr/bin/ffmpeg /downtify/ffmpeg
+# Step 3: Create cache directories and symlink ffmpeg
+RUN mkdir -p /.spotdl /.cache && \
+    ln -s /usr/bin/ffmpeg /downtify/ffmpeg
+
+# Set environment variables for cache paths
+ENV XDG_CACHE_HOME=/.cache
+ENV SPOTDL_CACHE_PATH=/.spotdl
 
 ENV UID=1000
 ENV GID=1000
