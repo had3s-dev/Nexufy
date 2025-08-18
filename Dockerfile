@@ -29,7 +29,6 @@ ENV GID=1000
 ENV UMASK=022
 
 ENV DOWNLOAD_DIR /downloads
-VOLUME /downloads
 EXPOSE ${DOWNTIFY_PORT}
 
 ENTRYPOINT ["/sbin/tini", "-g", "--", "./entrypoint.sh"]
