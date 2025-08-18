@@ -16,12 +16,13 @@ COPY templates ./templates
 COPY assets ./assets
 COPY static ./static
 
-# Install system dependencies including ffmpeg and certificates
+# Install system dependencies including gosu
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     curl \
     ca-certificates \
     wget \
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # Make entrypoint executable and install Python dependencies
@@ -38,4 +39,4 @@ ENV DOWNLOAD_DIR=/downloads
 
 EXPOSE ${DOWNTIFY_PORT}
 
-# ENTRYPOINT removed — Railway.json will handle start command
+ENTRYPOINT ["./entrypoint.sh"]
