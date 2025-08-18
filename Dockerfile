@@ -7,7 +7,6 @@ LABEL description="Self-hosted Spotify downloader"
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PYTHON_COLORS=0
-
 ENV DOWNTIFY_PORT=8000
 
 WORKDIR /downtify
@@ -27,8 +26,8 @@ RUN sed -i 's/\r$//g' entrypoint.sh && \
 ENV UID=1000
 ENV GID=1000
 ENV UMASK=022
+ENV DOWNLOAD_DIR=/downloads
 
-ENV DOWNLOAD_DIR /downloads
 EXPOSE ${DOWNTIFY_PORT}
 
-ENTRYPOINT ["/sbin/tini", "-g", "--", "./entrypoint.sh"]
+# ENTRYPOINT removed — Railway.json will handle start command
