@@ -52,13 +52,15 @@ DOWNLOADER_OPTIONS: DownloaderOptions = {
     'output': os.getenv(
         'OUTPUT_PATH', default='/downloads/{artists} - {title}.{output-ext}'
     ),
-    'ffmpeg': '/downtify/ffmpeg',
+    'ffmpeg': '/usr/bin/ffmpeg',  # Use system ffmpeg instead of downloaded one
     'audio_providers': ['youtube-music', 'youtube'],
     'lyrics_providers': ['genius', 'azlyrics'],
     'generate_lrc': False,
     'overwrite': 'skip',
     'restrict_filenames': False,
     'print_errors': True,
+    'download_timeout': 30,  # 30 second timeout
+    'max_retries': 2,        # Retry failed downloads
 }
 
 
@@ -109,13 +111,31 @@ def download_songs_sync(spotdlc, songs):
     results = []
     for song in songs:
         try:
+            # Add timeout for individual song downloads
+            import signal
+            
+            def timeout_handler(signum, frame):
+                raise TimeoutError("Download timed out")
+            
+            # Set a 60-second timeout per song
+            signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(60)
+            
             result = spotdlc.downloader.search_and_download(song)
+            signal.alarm(0)  # Cancel the alarm
             results.append(f"✅ Downloaded: {song.display_name}")
+            
+        except TimeoutError:
+            results.append(f"⏰ Download timed out: {song.display_name}")
+            print(f"Download timeout for {song.display_name}")
         except Exception as e:
             # Log the specific error and continue with next song
             error_msg = f"❌ Failed to download {song.display_name}: {str(e)}"
             results.append(error_msg)
             print(f"Download error for {song.display_name}: {e}")
+        finally:
+            signal.alarm(0)  # Make sure to cancel any remaining alarms
+            
     return results
 
 
