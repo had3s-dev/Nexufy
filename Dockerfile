@@ -25,12 +25,17 @@ RUN apt-get update && apt-get install -y \
     gosu \
     && rm -rf /var/lib/apt/lists/*
 
-# Make entrypoint executable and install Python dependencies
-RUN sed -i 's/\r$//g' entrypoint.sh && \
-    chmod +x entrypoint.sh && \
-    pip install --no-cache-dir --root-user-action ignore -r requirements-app.txt && \
-    spotdl --download-ffmpeg && \
-    cp /root/.spotdl/ffmpeg /downtify
+# Step 1: Fix entrypoint script line endings and permissions
+RUN sed -i 's/\r$//g' entrypoint.sh && chmod +x entrypoint.sh
+
+# Step 2: Install Python dependencies
+RUN pip install --no-cache-dir --root-user-action ignore -r requirements-app.txt
+
+# Step 3: Download ffmpeg via spotdl
+RUN spotdl --download-ffmpeg
+
+# Step 4: Copy ffmpeg to working directory
+RUN cp /root/.spotdl/ffmpeg /downtify
 
 ENV UID=1000
 ENV GID=1000
