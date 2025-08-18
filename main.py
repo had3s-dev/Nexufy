@@ -53,6 +53,12 @@ DOWNLOADER_OPTIONS: DownloaderOptions = {
         'OUTPUT_PATH', default='/downloads/{artists} - {title}.{output-ext}'
     ),
     'ffmpeg': '/downtify/ffmpeg',
+    'audio_providers': ['youtube-music', 'youtube'],
+    'lyrics_providers': ['genius', 'azlyrics'],
+    'generate_lrc': False,
+    'overwrite': 'skip',
+    'restrict_filenames': False,
+    'print_errors': True,
 }
 
 
@@ -100,8 +106,17 @@ def index(request: Request):
 
 def download_songs_sync(spotdlc, songs):
     """Synchronous download function to run in thread pool"""
+    results = []
     for song in songs:
-        spotdlc.downloader.search_and_download(song)
+        try:
+            result = spotdlc.downloader.search_and_download(song)
+            results.append(f"✅ Downloaded: {song.display_name}")
+        except Exception as e:
+            # Log the specific error and continue with next song
+            error_msg = f"❌ Failed to download {song.display_name}: {str(e)}"
+            results.append(error_msg)
+            print(f"Download error for {song.display_name}: {e}")
+    return results
 
 
 @app.post(
@@ -124,11 +139,16 @@ async def download_web_ui(  # Made async again
     - `200` - Download successful.
     """
     try:
+        print(f"Searching for: {url}")
         songs = spotdlc.search([url])
+        print(f"Found {len(songs)} songs: {[song.display_name for song in songs]}")
+        
         # Run download in a separate thread to avoid event loop conflicts
         loop = asyncio.get_event_loop()
         with ThreadPoolExecutor() as executor:
-            await loop.run_in_executor(executor, download_songs_sync, spotdlc, songs)
+            results = await loop.run_in_executor(executor, download_songs_sync, spotdlc, songs)
+        
+        print(f"Download results: {results}")
     except Exception as error:
         return f"""
     <div>
