@@ -11,6 +11,10 @@ from spotdl import Spotdl
 from spotdl.types.options import DownloaderOptions
 from starlette.requests import Request
 
+# NEW middleware imports
+from starlette.middleware.proxy_headers import ProxyHeadersMiddleware
+from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
+
 load_dotenv()
 
 DESCRIPTION = """
@@ -36,6 +40,10 @@ app = FastAPI(
     terms_of_service='https://github.com/henriquesebastiao/downtify/',
 )
 
+# ✅ Ensure FastAPI knows about HTTPS when behind Railway/Cloudflare
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+# ✅ Redirect any http:// requests automatically to https://
+app.add_middleware(HTTPSRedirectMiddleware)
 
 app.mount('/static', StaticFiles(directory='static'), name='static')
 app.mount('/assets', StaticFiles(directory='assets'), name='assets')
@@ -106,15 +114,6 @@ def download_web_ui(
     spotdlc: Spotdl = Depends(get_spotdl),
     url: str = Form(...),
 ):
-    """
-    You can download a single song or all the songs in a playlist, album, etc.
-
-    - **url**: URL of the song or playlist to download.
-
-    ### Responses
-
-    - `200` - Download successful.
-    """
     try:
         songs = spotdlc.search([url])
         spotdlc.download_songs(songs)
@@ -149,15 +148,6 @@ def download(
     url: str,
     spotdlc: Spotdl = Depends(get_spotdl),
 ):
-    """
-    You can download a single song or all the songs in a playlist, album, etc.
-
-    - **url**: URL of the song or playlist to download.
-
-    ### Responses
-
-    - `200` - Download successful.
-    """
     try:
         songs = spotdlc.search([url])
         spotdlc.download_songs(songs)
