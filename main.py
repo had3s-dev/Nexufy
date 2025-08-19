@@ -2,10 +2,9 @@ import os
 import uuid
 import shutil
 from datetime import datetime, timedelta
-from urllib.parse import urlparse
 from flask import Flask, render_template, request, send_from_directory, flash, redirect, url_for
 from spotdl import Spotdl
-from spotdl.download.downloader import Downloader # Correct import for the downloader class
+from spotdl.download.downloader import Downloader
 from apscheduler.schedulers.background import BackgroundScheduler
 import logging
 
@@ -87,20 +86,23 @@ def index():
                 return redirect(url_for('index'))
 
             # 2. The Downloader class handles the actual download process.
-            # Corrected: Proxy must be passed as a dictionary under the 'proxies' key within the settings.
-            # Corrected: Output format should be in downloader_settings
             output_format = os.path.join(session_folder, "{title} - {artist}.{output-ext}")
             downloader_settings = {
                 "simple_tui": True,
-                "output": output_format
+                "output": output_format,
             }
-            proxy_url_raw = os.environ.get('PROXY_URL')
-            if proxy_url_raw:
-                logging.info(f"Setting proxy via settings dictionary: {proxy_url_raw}")
-                downloader_settings["proxies"] = {
-                    "http://": proxy_url_raw,
-                    "https://": proxy_url_raw,
-                }
+
+            # --- CORRECTED PROXY IMPLEMENTATION ---
+            # Get the proxy URL from the environment variables.
+            proxy_url = os.environ.get('PROXY_URL')
+            if proxy_url:
+                logging.info(f"Using proxy: {proxy_url}")
+                # Pass the proxy directly to yt-dlp using the 'yt_dlp_args' setting.
+                # This ensures all of yt-dlp's traffic goes through the proxy.
+                downloader_settings["yt_dlp_args"] = [
+                    "--proxy", proxy_url
+                ]
+            # --- END OF CORRECTION ---
 
             downloader = Downloader(settings=downloader_settings)
 
@@ -108,7 +110,6 @@ def index():
             downloaded_file = None
 
             for song in songs:
-                # Corrected: download_song takes only one argument
                 _, path = downloader.download_song(song)
                 if path:
                     downloaded_file = os.path.basename(path)
