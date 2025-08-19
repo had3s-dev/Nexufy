@@ -354,7 +354,7 @@ def delete_cookies(filename):
 
 @app.route('/process', methods=['POST'])
 def process_download():
-    """Process download with automatic cookie selection"""
+    """Process download with automatic cookie selection and proxy fallback."""
     url = request.form.get('url')
     user_name = sanitize_name(request.form.get('name'))
 
@@ -375,13 +375,7 @@ def process_download():
         if not client_id or not client_secret:
             raise ValueError("Spotify API credentials are not configured.")
 
-        # Initialize Spotdl for searching ONLY. It does not need proxy info.
-        spotify_client = Spotdl(
-            client_id=client_id,
-            client_secret=client_secret,
-            headless=True
-        )
-
+        spotify_client = Spotdl(client_id=client_id, client_secret=client_secret, headless=True)
         songs = spotify_client.search([url])
 
         if not songs:
@@ -399,51 +393,55 @@ def process_download():
         else:
             output_format = os.path.join(session_folder, "{title} - {artist}.{output-ext}")
 
-        # --- ENHANCED PROXY + AUTOMATIC COOKIE SELECTION ---
-        downloader_settings = {"simple_tui": True, "output": output_format}
-
-        # Build yt-dlp args list
-        yt_dlp_args = []
-
-        # Add proxy settings if available
+        # --- DOWNLOAD LOGIC WITH PROXY FALLBACK ---
+        downloaded_files_count = 0
         proxy_url = os.environ.get('PROXY_URL')
-        if proxy_url:
-            logging.info(f"Using proxy: {proxy_url}")
-            yt_dlp_args.extend([
-                "--proxy", proxy_url,
-                "--source-address", "0.0.0.0"
-            ])
-        else:
-            logging.warning("PROXY_URL not set. Proceeding without proxy.")
-
-        # Add YouTube-specific fixes for recent restrictions
-        yt_dlp_args.extend([
-            "--socket-timeout", "30",
-            "--retries", "3",
-            "--fragment-retries", "3",
-            "--retry-sleep", "1",
-            "--no-abort-on-error",
-            "--ignore-errors",
-            "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        ])
-
-        # Use best available cookies
         best_cookies = get_best_cookies()
-        if best_cookies:
-            yt_dlp_args.extend(["--cookies", best_cookies])
-            logging.info(f"Using cookies from: {best_cookies}")
-        else:
-            logging.warning("No cookies available - downloads may fail")
 
-        # Convert args list to string format for spotdl 4.4.0 compatibility
-        if yt_dlp_args:
-            downloader_settings["yt_dlp_args"] = " ".join(yt_dlp_args)
-            logging.info(f"yt-dlp args: {downloader_settings['yt_dlp_args']}")
+        for song in songs:
+            success = False
 
-        # Initialize the downloader with enhanced settings
-        downloader = Downloader(settings=downloader_settings)
+            # Attempt 1: With proxy (if available)
+            if proxy_url:
+                logging.info(f"Attempting to download '{song.name}' with proxy...")
+                downloader_settings = {"simple_tui": True, "output": output_format}
+                yt_dlp_args = [
+                    "--proxy", proxy_url, "--source-address", "0.0.0.0",
+                    "--socket-timeout", "30", "--retries", "3", "--fragment-retries", "3",
+                    "--retry-sleep", "1", "--no-abort-on-error", "--ignore-errors",
+                    "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                ]
+                if best_cookies:
+                    yt_dlp_args.extend(["--cookies", best_cookies])
+                
+                downloader_settings["yt_dlp_args"] = " ".join(yt_dlp_args)
+                downloader = Downloader(settings=downloader_settings)
+                success, _ = downloader.download_song(song)
 
-        downloaded_files_count = sum(1 for song in songs if downloader.download_song(song)[1])
+            # Attempt 2: Without proxy (if first attempt failed or no proxy was set)
+            if not success:
+                if proxy_url:
+                    logging.warning(f"Download with proxy failed for '{song.name}'. Retrying without proxy...")
+                else:
+                    logging.info(f"Attempting to download '{song.name}' (no proxy)...")
+
+                downloader_settings = {"simple_tui": True, "output": output_format}
+                yt_dlp_args = [
+                    "--socket-timeout", "30", "--retries", "3", "--fragment-retries", "3",
+                    "--retry-sleep", "1", "--no-abort-on-error", "--ignore-errors",
+                    "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                ]
+                if best_cookies:
+                    yt_dlp_args.extend(["--cookies", best_cookies])
+
+                downloader_settings["yt_dlp_args"] = " ".join(yt_dlp_args)
+                downloader = Downloader(settings=downloader_settings)
+                success, _ = downloader.download_song(song)
+
+            if success:
+                downloaded_files_count += 1
+        
+        # --- END OF DOWNLOAD LOGIC ---
 
         if downloaded_files_count > 0:
             if is_playlist:
@@ -453,11 +451,11 @@ def process_download():
                 shutil.rmtree(download_path)
             else:
                 final_filename = os.listdir(session_folder)[0]
-
+            
             logging.info(f"Successfully prepared '{final_filename}' for user '{user_name}'")
             return render_template('index.html', download_link=True, user_name=user_name, session_id=session_id, filename=final_filename)
         else:
-            flash('ERROR: Download failed. The URL might be invalid or protected. Try uploading fresh cookies.', 'danger')
+            flash('ERROR: Download failed after multiple attempts. The URL might be invalid or protected. Try uploading fresh cookies.', 'danger')
             shutil.rmtree(session_folder)
 
     except Exception as e:
@@ -468,14 +466,13 @@ def process_download():
 
     return redirect(url_for('index'))
 
-# Keep all your existing routes (converter, downloads, etc.)
 @app.route('/converter', methods=['GET', 'POST'])
 def converter_page():
     if request.method == 'POST':
         if 'file' not in request.files:
             flash('ERROR: No file part in request.', 'danger')
             return redirect(request.url)
-
+        
         file = request.files['file']
         if file.filename == '':
             flash('ERROR: No file selected.', 'danger')
@@ -491,12 +488,12 @@ def converter_page():
         if file:
             temp_id = str(uuid.uuid4())
             upload_path = os.path.join(CONVERTER_UPLOADS, temp_id)
-
+            
             try:
                 file.save(upload_path)
                 logging.info(f"Converting {file.filename} to {target_format}")
                 audio = AudioSegment.from_file(upload_path)
-
+                
                 output_filename = f"{os.path.splitext(file.filename)[0]}.{target_format}"
                 output_path = os.path.join(CONVERTER_OUTPUT, output_filename)
                 audio.export(output_path, format=target_format)
