@@ -18,11 +18,11 @@ RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
 COPY . .
 
 # Make port 8000 available to the world outside this container
-EXPOSE 8000
+EXPOSE 8080
 
 # Define environment variable for the Flask app
 ENV FLASK_APP=main.py
 
 # Run the application using Gunicorn with the --preload flag
 # --preload loads the app before forking workers, preventing initialization race conditions.
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "4", "--preload", "main:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "4", "--preload", "main:app"]
