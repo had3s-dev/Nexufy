@@ -6,6 +6,7 @@ from flask import Flask, render_template, request, send_from_directory, flash, r
 from spotdl import Spotdl
 from spotdl.download.downloader import Downloader
 from apscheduler.schedulers.background import BackgroundScheduler
+from pydub import AudioSegment
 import logging
 import re
 
@@ -13,24 +14,29 @@ import re
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'a_secure_random_secret_key')
+
+# --- Folder Setup ---
 DOWNLOAD_FOLDER = 'downloads'
-if not os.path.exists(DOWNLOAD_FOLDER):
-    os.makedirs(DOWNLOAD_FOLDER)
+CONVERTER_UPLOADS = 'converter_uploads'
+CONVERTER_OUTPUT = 'converter_output'
+
+for folder in [DOWNLOAD_FOLDER, CONVERTER_UPLOADS, CONVERTER_OUTPUT]:
+    if not os.path.exists(folder):
+        os.makedirs(folder)
 
 # --- Helper Functions ---
 def sanitize_name(name):
-    """Sanitizes a string to be used as a directory name."""
     if not name:
         return "guest"
-    # Remove invalid characters and limit length
     return re.sub(r'[^a-zA-Z0-9_-]', '', name).strip()[:50] or "guest"
 
 # --- Background Cleanup Scheduler ---
-def cleanup_old_folders():
-    """Removes download folders older than 12 hours."""
-    logging.info("Running scheduled cleanup of old download folders...")
+def cleanup_old_files():
+    logging.info("Running scheduled cleanup of old files and folders...")
     now = datetime.now()
     cutoff = now - timedelta(hours=12)
+    
+    # Clean downloader session folders
     try:
         for user_folder_name in os.listdir(DOWNLOAD_FOLDER):
             user_folder_path = os.path.join(DOWNLOAD_FOLDER, user_folder_name)
@@ -38,18 +44,25 @@ def cleanup_old_folders():
                 for session_folder_name in os.listdir(user_folder_path):
                     session_folder_path = os.path.join(user_folder_path, session_folder_name)
                     if os.path.isdir(session_folder_path):
-                        try:
-                            folder_creation_time = datetime.fromtimestamp(os.path.getctime(session_folder_path))
-                            if folder_creation_time < cutoff:
-                                shutil.rmtree(session_folder_path)
-                                logging.info(f"Deleted old session folder: {session_folder_path}")
-                        except Exception as e:
-                            logging.error(f"Error processing folder {session_folder_path}: {e}")
+                        if datetime.fromtimestamp(os.path.getctime(session_folder_path)) < cutoff:
+                            shutil.rmtree(session_folder_path)
+                            logging.info(f"Deleted old session folder: {session_folder_path}")
     except Exception as e:
-        logging.error(f"An error occurred during cleanup: {e}")
+        logging.error(f"Error during downloader cleanup: {e}")
+
+    # Clean converter temporary files
+    for folder in [CONVERTER_UPLOADS, CONVERTER_OUTPUT]:
+        try:
+            for filename in os.listdir(folder):
+                file_path = os.path.join(folder, filename)
+                if datetime.fromtimestamp(os.path.getctime(file_path)) < cutoff:
+                    os.remove(file_path)
+                    logging.info(f"Deleted old converter file: {file_path}")
+        except Exception as e:
+            logging.error(f"Error during {folder} cleanup: {e}")
 
 scheduler = BackgroundScheduler(daemon=True)
-scheduler.add_job(cleanup_old_folders, 'interval', hours=1)
+scheduler.add_job(cleanup_old_files, 'interval', hours=1)
 scheduler.start()
 
 # --- Flask Routes ---
@@ -60,7 +73,7 @@ def index():
         user_name = sanitize_name(request.form.get('name'))
 
         if not url:
-            flash('Please provide a Spotify or YouTube URL.', 'danger')
+            flash('ERROR: No URL provided.', 'danger')
             return redirect(url_for('index'))
 
         session_id = str(uuid.uuid4())
@@ -70,7 +83,6 @@ def index():
 
         try:
             logging.info(f"Processing URL for user '{user_name}': {url} in session {session_id}")
-
             client_id = os.environ.get('SPOTIFY_CLIENT_ID')
             client_secret = os.environ.get('SPOTIFY_CLIENT_SECRET')
 
@@ -81,7 +93,7 @@ def index():
             songs = spotify_client.search([url])
 
             if not songs:
-                flash('Could not find any songs. Please check the link.', 'warning')
+                flash('WARNING: Could not find any songs for the given URL.', 'warning')
                 shutil.rmtree(session_folder)
                 return redirect(url_for('index'))
 
@@ -96,23 +108,12 @@ def index():
                 output_format = os.path.join(session_folder, "{title} - {artist}.{output-ext}")
 
             downloader_settings = {"simple_tui": True, "output": output_format}
-
-            # --- START OF CORRECTED PROXY IMPLEMENTATION ---
             proxy_url = os.environ.get('PROXY_URL')
             if proxy_url:
-                logging.info(f"Attempting to use proxy: {proxy_url}")
                 downloader_settings["yt_dlp_args"] = f"--proxy {proxy_url} --source-address 0.0.0.0"
-            else:
-                logging.warning("PROXY_URL environment variable not set. Proceeding without a proxy.")
-            # --- END OF CORRECTED PROXY IMPLEMENTATION ---
 
             downloader = Downloader(settings=downloader_settings)
-            
-            downloaded_files_count = 0
-            for song in songs:
-                _, path = downloader.download_song(song)
-                if path:
-                    downloaded_files_count += 1
+            downloaded_files_count = sum(1 for song in songs if downloader.download_song(song)[1])
 
             if downloaded_files_count > 0:
                 if is_playlist:
@@ -126,12 +127,12 @@ def index():
                 logging.info(f"Successfully prepared '{final_filename}' for user '{user_name}'")
                 return render_template('index.html', download_link=True, user_name=user_name, session_id=session_id, filename=final_filename)
             else:
-                flash('Download failed. The URL might be invalid or protected.', 'danger')
+                flash('ERROR: Download failed. The URL might be invalid or protected.', 'danger')
                 shutil.rmtree(session_folder)
 
         except Exception as e:
             logging.error(f"An error occurred for user '{user_name}': {e}", exc_info=True)
-            flash(f'An unexpected error occurred: {e}', 'danger')
+            flash(f'FATAL ERROR: {e}', 'danger')
             if os.path.exists(session_folder):
                 shutil.rmtree(session_folder)
 
@@ -139,9 +140,56 @@ def index():
 
     return render_template('index.html')
 
+@app.route('/converter', methods=['GET', 'POST'])
+def converter_page():
+    if request.method == 'POST':
+        if 'file' not in request.files:
+            flash('ERROR: No file part in request.', 'danger')
+            return redirect(request.url)
+        
+        file = request.files['file']
+        if file.filename == '':
+            flash('ERROR: No file selected.', 'danger')
+            return redirect(request.url)
+
+        target_format = request.form.get('format', 'mp3')
+        allowed_formats = ['mp3', 'wav', 'flac', 'ogg']
+
+        if target_format not in allowed_formats:
+            flash('ERROR: Invalid target format.', 'danger')
+            return redirect(request.url)
+
+        if file:
+            try:
+                # Save uploaded file temporarily
+                original_filename = str(uuid.uuid4())
+                upload_path = os.path.join(CONVERTER_UPLOADS, original_filename)
+                file.save(upload_path)
+
+                # Convert file
+                logging.info(f"Converting {file.filename} to {target_format}")
+                audio = AudioSegment.from_file(upload_path)
+                
+                output_filename = f"{os.path.splitext(file.filename)[0]}.{target_format}"
+                output_path = os.path.join(CONVERTER_OUTPUT, output_filename)
+                audio.export(output_path, format=target_format)
+
+                return render_template('converter.html', conversion_complete=True, filename=output_filename)
+
+            except Exception as e:
+                logging.error(f"Conversion failed: {e}", exc_info=True)
+                flash(f"ERROR: Conversion failed. The uploaded file may not be a valid audio format. Details: {e}", 'danger')
+                return redirect(request.url)
+
+    return render_template('converter.html')
+
+@app.route('/download_converted/<filename>')
+def download_converted_file(filename):
+    logging.info(f"Serving converted file: {filename}")
+    return send_from_directory(CONVERTER_OUTPUT, filename, as_attachment=True)
+
 @app.route('/downloads')
 def downloads_page():
-    """Displays a list of all available downloads, sorted by user and time."""
     all_downloads = []
     try:
         for user_name in sorted(os.listdir(DOWNLOAD_FOLDER)):
@@ -152,7 +200,6 @@ def downloads_page():
                     session_folder_path = os.path.join(user_folder_path, session_id)
                     if os.path.isdir(session_folder_path):
                         for filename in os.listdir(session_folder_path):
-                            file_path = os.path.join(session_folder_path, filename)
                             creation_time = datetime.fromtimestamp(os.path.getctime(session_folder_path))
                             user_files.append({
                                 'user_name': user_name,
@@ -171,7 +218,6 @@ def downloads_page():
 
 @app.route('/download/<user_name>/<session_id>/<filename>')
 def download_file(user_name, session_id, filename):
-    """Serves the downloaded file to the user."""
     directory = os.path.join(DOWNLOAD_FOLDER, user_name, session_id)
     logging.info(f"Serving file: {filename} for user: {user_name}")
     return send_from_directory(directory, filename, as_attachment=True)
