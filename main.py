@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 from flask import Flask, render_template, request, send_from_directory, flash, redirect, url_for
 from spotdl import Spotdl
 from spotdl.download.downloader import Downloader
+from spotdl.types.song import Song
+from spotdl.errors import AudioProviderError
 from apscheduler.schedulers.background import BackgroundScheduler
 from pydub import AudioSegment
 import logging
@@ -403,40 +405,48 @@ def process_download():
 
             # Attempt 1: With proxy (if available)
             if proxy_url:
-                logging.info(f"Attempting to download '{song.name}' with proxy...")
-                downloader_settings = {"simple_tui": True, "output": output_format}
-                yt_dlp_args = [
-                    "--proxy", proxy_url, "--source-address", "0.0.0.0",
-                    "--socket-timeout", "30", "--retries", "3", "--fragment-retries", "3",
-                    "--retry-sleep", "1", "--no-abort-on-error", "--ignore-errors",
-                    "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                ]
-                if best_cookies:
-                    yt_dlp_args.extend(["--cookies", best_cookies])
-                
-                downloader_settings["yt_dlp_args"] = " ".join(yt_dlp_args)
-                downloader = Downloader(settings=downloader_settings)
-                success, _ = downloader.download_song(song)
+                try:
+                    logging.info(f"Attempting to download '{song.name}' with proxy...")
+                    downloader_settings = {"simple_tui": True, "output": output_format}
+                    yt_dlp_args = [
+                        "--proxy", proxy_url, "--source-address", "0.0.0.0",
+                        "--socket-timeout", "30", "--retries", "3", "--fragment-retries", "3",
+                        "--retry-sleep", "1", "--no-abort-on-error", "--ignore-errors",
+                        "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    ]
+                    if best_cookies:
+                        yt_dlp_args.extend(["--cookies", best_cookies])
+                    
+                    downloader_settings["yt_dlp_args"] = " ".join(yt_dlp_args)
+                    downloader = Downloader(settings=downloader_settings)
+                    success, _ = downloader.download_song(song)
+                except AudioProviderError as e:
+                    logging.error(f"AudioProviderError with proxy: {e}")
+                    success = False
 
             # Attempt 2: Without proxy (if first attempt failed or no proxy was set)
             if not success:
-                if proxy_url:
-                    logging.warning(f"Download with proxy failed for '{song.name}'. Retrying without proxy...")
-                else:
-                    logging.info(f"Attempting to download '{song.name}' (no proxy)...")
+                try:
+                    if proxy_url:
+                        logging.warning(f"Download with proxy failed for '{song.name}'. Retrying without proxy...")
+                    else:
+                        logging.info(f"Attempting to download '{song.name}' (no proxy)...")
 
-                downloader_settings = {"simple_tui": True, "output": output_format}
-                yt_dlp_args = [
-                    "--socket-timeout", "30", "--retries", "3", "--fragment-retries", "3",
-                    "--retry-sleep", "1", "--no-abort-on-error", "--ignore-errors",
-                    "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                ]
-                if best_cookies:
-                    yt_dlp_args.extend(["--cookies", best_cookies])
+                    downloader_settings = {"simple_tui": True, "output": output_format}
+                    yt_dlp_args = [
+                        "--socket-timeout", "30", "--retries", "3", "--fragment-retries", "3",
+                        "--retry-sleep", "1", "--no-abort-on-error", "--ignore-errors",
+                        "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    ]
+                    if best_cookies:
+                        yt_dlp_args.extend(["--cookies", best_cookies])
 
-                downloader_settings["yt_dlp_args"] = " ".join(yt_dlp_args)
-                downloader = Downloader(settings=downloader_settings)
-                success, _ = downloader.download_song(song)
+                    downloader_settings["yt_dlp_args"] = " ".join(yt_dlp_args)
+                    downloader = Downloader(settings=downloader_settings)
+                    success, _ = downloader.download_song(song)
+                except AudioProviderError as e:
+                    logging.error(f"AudioProviderError without proxy: {e}")
+                    success = False
         
         # --- END OF DOWNLOAD LOGIC ---
 
