@@ -87,8 +87,8 @@ def index():
                 return redirect(url_for('index'))
 
             # 2. The Downloader class handles the actual download process.
+            # Corrected: 'output' is removed from the constructor arguments.
             downloader_settings = {
-                "output": os.path.join(session_folder, "{title} - {artist}.{output-ext}"),
                 "format": "mp3",
                 "log_level": "INFO",
             }
@@ -98,12 +98,12 @@ def index():
             
             downloader = Downloader(**downloader_settings)
 
-            # 3. Download the songs using the downloader instance.
-            results = downloader.download_songs(songs)
-            
-            # Find the first successfully downloaded song
+            # 3. Corrected: Iterate and download each song individually, passing the output path.
             downloaded_file = None
-            for song, path in results:
+            output_format = os.path.join(session_folder, "{title} - {artist}.{output-ext}")
+
+            for song in songs:
+                path = downloader.download_song(song, output_format)
                 if path:
                     downloaded_file = os.path.basename(path)
                     break # We only handle the first file for simplicity
