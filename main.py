@@ -92,16 +92,12 @@ def index():
                 "output": output_format,
             }
 
-            # --- CORRECTED PROXY IMPLEMENTATION ---
-            # Get the proxy URL from the environment variables.
+            # --- FINAL PROXY IMPLEMENTATION ---
             proxy_url = os.environ.get('PROXY_URL')
             if proxy_url:
                 logging.info(f"Using proxy: {proxy_url}")
-                # Pass the proxy directly to yt-dlp using the 'yt_dlp_args' setting.
-                # This ensures all of yt-dlp's traffic goes through the proxy.
-                downloader_settings["yt_dlp_args"] = [
-                    "--proxy", proxy_url
-                ]
+                # The value for 'yt_dlp_args' must be a single string.
+                downloader_settings["yt_dlp_args"] = f"--proxy {proxy_url}"
             # --- END OF CORRECTION ---
 
             downloader = Downloader(settings=downloader_settings)
