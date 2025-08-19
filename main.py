@@ -1,6 +1,7 @@
 import os
 import uuid
 import shutil
+import glob
 from datetime import datetime, timedelta
 from flask import Flask, render_template, request, send_from_directory, flash, redirect, url_for
 from spotdl import Spotdl
@@ -9,6 +10,8 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from pydub import AudioSegment
 import logging
 import re
+import tempfile
+import requests
 
 # --- Configuration ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -16,7 +19,6 @@ app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'a_secure_random_secret_key')
 
 # --- Railway-specific ffmpeg configuration ---
-# Railway may have ffmpeg in different locations, so we try multiple paths
 def find_ffmpeg():
     possible_paths = [
         "/usr/bin/ffmpeg",
@@ -54,13 +56,13 @@ AudioSegment.converter = find_ffmpeg()
 AudioSegment.ffprobe = find_ffprobe()
 
 # --- Railway-optimized folder setup with temp directory ---
-# Use Railway's /tmp directory for ephemeral storage
 TEMP_BASE = os.environ.get('RAILWAY_VOLUME_MOUNT_PATH', '/tmp')
 DOWNLOAD_FOLDER = os.path.join(TEMP_BASE, 'downloads')
 CONVERTER_UPLOADS = os.path.join(TEMP_BASE, 'converter_uploads') 
 CONVERTER_OUTPUT = os.path.join(TEMP_BASE, 'converter_output')
+COOKIES_FOLDER = os.path.join(TEMP_BASE, 'cookies')  # New folder for user cookies
 
-for folder in [DOWNLOAD_FOLDER, CONVERTER_UPLOADS, CONVERTER_OUTPUT]:
+for folder in [DOWNLOAD_FOLDER, CONVERTER_UPLOADS, CONVERTER_OUTPUT, COOKIES_FOLDER]:
     if not os.path.exists(folder):
         os.makedirs(folder, exist_ok=True)
         logging.info(f"Created directory: {folder}")
@@ -71,32 +73,141 @@ def sanitize_name(name):
         return "guest"
     return re.sub(r'[^a-zA-Z0-9_-]', '', name).strip()[:50] or "guest"
 
-def check_youtube_setup():
-    """Check if YouTube cookies are configured for better reliability"""
-    cookies_path = os.environ.get('YOUTUBE_COOKIES_FILE')
+def validate_cookies_file(content):
+    """Validate that uploaded content is a proper cookies file"""
+    lines = content.strip().split('\n')
     
-    # For Railway, cookies might be stored as an environment variable
-    cookies_content = os.environ.get('YOUTUBE_COOKIES_CONTENT')
+    # Check for Netscape header
+    if not lines[0].startswith('# Netscape HTTP Cookie File'):
+        return False, "Invalid format: Missing Netscape header"
     
-    if cookies_content:
-        # Create cookies file from environment variable content
-        cookies_path = os.path.join(TEMP_BASE, 'youtube_cookies.txt')
+    # Check for YouTube/Google cookies
+    has_youtube_cookies = False
+    valid_lines = 0
+    
+    for line in lines[1:]:  # Skip header
+        if line.startswith('#') or not line.strip():
+            continue
+            
+        parts = line.split('\t')
+        if len(parts) >= 7:
+            domain = parts[0]
+            if 'youtube.com' in domain or 'google.com' in domain:
+                has_youtube_cookies = True
+            valid_lines += 1
+        else:
+            return False, f"Invalid line format: {line[:50]}..."
+    
+    if not has_youtube_cookies:
+        return False, "No YouTube/Google cookies found"
+    
+    if valid_lines < 3:
+        return False, "Too few valid cookies"
+    
+    return True, f"Valid cookies file with {valid_lines} cookies"
+
+def test_cookies_validity(cookies_path):
+    """Test if cookies work by making a simple request"""
+    try:
+        import http.cookiejar
+        import urllib.request
+        
+        # Load cookies
+        jar = http.cookiejar.MozillaCookieJar(cookies_path)
+        jar.load(ignore_discard=True, ignore_expires=True)
+        
+        # Test request to YouTube
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+        opener.addheaders = [('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')]
+        
+        response = opener.open('https://www.youtube.com', timeout=10)
+        
+        if response.getcode() == 200:
+            content = response.read().decode('utf-8')
+            # Check for logged-in indicators
+            if 'avatar' in content.lower() or 'channel' in content.lower():
+                return True, "Cookies appear to be from logged-in session"
+            else:
+                return True, "Cookies work but may not be logged in"
+        
+        return False, f"HTTP {response.getcode()}"
+        
+    except Exception as e:
+        return False, str(e)
+
+def get_best_cookies():
+    """Find the best working cookies from available options"""
+    cookies_options = []
+    
+    # Option 1: Environment variable cookies
+    env_cookies = os.environ.get('YOUTUBE_COOKIES_CONTENT')
+    if env_cookies:
+        env_path = os.path.join(TEMP_BASE, 'env_cookies.txt')
         try:
-            with open(cookies_path, 'w') as f:
-                f.write(cookies_content)
-            os.environ['YOUTUBE_COOKIES_FILE'] = cookies_path
-            logging.info("YouTube cookies created from environment variable")
-            return
+            with open(env_path, 'w') as f:
+                f.write(env_cookies)
+            
+            is_working, status = test_cookies_validity(env_path)
+            cookies_options.append({
+                'path': env_path,
+                'source': 'Environment Variable',
+                'working': is_working,
+                'status': status,
+                'age': 0  # Always consider env cookies as "fresh"
+            })
         except Exception as e:
-            logging.error(f"Failed to create cookies file from environment: {e}")
+            logging.error(f"Failed to create env cookies file: {e}")
     
-    if not cookies_path:
-        logging.warning("YOUTUBE_COOKIES_FILE not set - downloads may fail due to YouTube restrictions")
-        logging.warning("Consider setting YOUTUBE_COOKIES_CONTENT environment variable with cookies content")
-    elif not os.path.exists(cookies_path):
-        logging.warning(f"YouTube cookies file not found at: {cookies_path}")
+    # Option 2: User uploaded cookies
+    cookie_files = glob.glob(os.path.join(COOKIES_FOLDER, '*.txt'))
+    for cookie_file in cookie_files:
+        try:
+            age_hours = (datetime.now() - datetime.fromtimestamp(os.path.getctime(cookie_file))).total_seconds() / 3600
+            is_working, status = test_cookies_validity(cookie_file)
+            
+            cookies_options.append({
+                'path': cookie_file,
+                'source': f'User Upload: {os.path.basename(cookie_file)}',
+                'working': is_working,
+                'status': status,
+                'age': age_hours
+            })
+        except Exception as e:
+            logging.error(f"Error testing cookies {cookie_file}: {e}")
+    
+    # Sort by working status first, then by age (newer first)
+    cookies_options.sort(key=lambda x: (not x['working'], x['age']))
+    
+    # Log all options
+    logging.info(f"Found {len(cookies_options)} cookie options:")
+    for i, option in enumerate(cookies_options):
+        status_icon = "✅" if option['working'] else "❌"
+        logging.info(f"  {i+1}. {status_icon} {option['source']} (Age: {option['age']:.1f}h) - {option['status']}")
+    
+    # Return the best working option
+    for option in cookies_options:
+        if option['working']:
+            logging.info(f"Using cookies from: {option['source']}")
+            return option['path']
+    
+    # If no working cookies, return the newest one and log warning
+    if cookies_options:
+        newest = cookies_options[0]
+        logging.warning(f"No working cookies found, using newest: {newest['source']}")
+        return newest['path']
+    
+    logging.warning("No cookies available")
+    return None
+
+def setup_youtube_cookies():
+    """Setup YouTube cookies using the best available option"""
+    best_cookies = get_best_cookies()
+    
+    if best_cookies:
+        os.environ['YOUTUBE_COOKIES_FILE'] = best_cookies
+        return True
     else:
-        logging.info("YouTube cookies file found - better download reliability expected")
+        return False
 
 # --- Railway-optimized cleanup scheduler ---
 def cleanup_old_files():
@@ -123,133 +234,241 @@ def cleanup_old_files():
                     logging.warning(f"Could not delete {item_path}: {e}")
         except Exception as e:
             logging.error(f"Error during cleanup of {base_folder}: {e}")
+    
+    # Clean old cookies (keep for 7 days)
+    cookie_cutoff = now - timedelta(days=7)
+    try:
+        for cookie_file in glob.glob(os.path.join(COOKIES_FOLDER, '*.txt')):
+            if datetime.fromtimestamp(os.path.getctime(cookie_file)) < cookie_cutoff:
+                os.remove(cookie_file)
+                logging.info(f"Deleted old cookies: {cookie_file}")
+    except Exception as e:
+        logging.error(f"Error cleaning cookies: {e}")
 
 # More frequent cleanup for Railway
 scheduler = BackgroundScheduler(daemon=True)
 scheduler.add_job(cleanup_old_files, 'interval', minutes=30)  # Every 30 minutes
 scheduler.start()
 
-# Check YouTube setup on startup
-check_youtube_setup()
+# Setup cookies on startup
+setup_youtube_cookies()
 
 # --- Flask Routes ---
-@app.route('/', methods=['GET', 'POST'])
+@app.route('/')
 def index():
-    if request.method == 'POST':
-        url = request.form.get('url')
-        user_name = sanitize_name(request.form.get('name'))
-
-        if not url:
-            flash('ERROR: No URL provided.', 'danger')
-            return redirect(url_for('index'))
-
-        session_id = str(uuid.uuid4())
-        user_download_folder = os.path.join(DOWNLOAD_FOLDER, user_name)
-        session_folder = os.path.join(user_download_folder, session_id)
-        os.makedirs(session_folder, exist_ok=True)
-
-        try:
-            logging.info(f"Processing URL for user '{user_name}': {url} in session {session_id}")
-            client_id = os.environ.get('SPOTIFY_CLIENT_ID')
-            client_secret = os.environ.get('SPOTIFY_CLIENT_SECRET')
-
-            if not client_id or not client_secret:
-                raise ValueError("Spotify API credentials are not configured.")
-
-            # Initialize Spotdl for searching ONLY. It does not need proxy info.
-            spotify_client = Spotdl(
-                client_id=client_id,
-                client_secret=client_secret,
-                headless=True
-            )
-
-            songs = spotify_client.search([url])
-
-            if not songs:
-                flash('WARNING: Could not find any songs for the given URL.', 'warning')
-                shutil.rmtree(session_folder)
-                return redirect(url_for('index'))
-
-            is_playlist = len(songs) > 1
-            if is_playlist:
-                playlist_name = songs[0].album or songs[0].artist or "Playlist"
-                sanitized_playlist_name = "".join(c for c in playlist_name if c.isalnum() or c in (' ', '-')).rstrip()
-                download_path = os.path.join(session_folder, sanitized_playlist_name)
-                os.makedirs(download_path, exist_ok=True)
-                output_format = os.path.join(download_path, "{title} - {artist}.{output-ext}")
-            else:
-                output_format = os.path.join(session_folder, "{title} - {artist}.{output-ext}")
-
-            # --- ENHANCED PROXY + YOUTUBE FIX FOR SPOTDL 4.4.0 ---
-            downloader_settings = {"simple_tui": True, "output": output_format}
-            
-            # Build yt-dlp args list
-            yt_dlp_args = []
-            
-            # Add proxy settings if available
-            proxy_url = os.environ.get('PROXY_URL')
-            if proxy_url:
-                logging.info(f"Using proxy: {proxy_url}")
-                yt_dlp_args.extend([
-                    "--proxy", proxy_url,
-                    "--source-address", "0.0.0.0"
-                ])
-            else:
-                logging.warning("PROXY_URL not set. Proceeding without proxy.")
-            
-            # Add YouTube-specific fixes for recent restrictions
-            yt_dlp_args.extend([
-                "--socket-timeout", "30",
-                "--retries", "3",
-                "--fragment-retries", "3",
-                "--retry-sleep", "1",
-                "--no-abort-on-error",
-                "--ignore-errors",
-                "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            ])
-            
-            # Add cookies if available (highly recommended for YouTube)
-            cookies_path = os.environ.get('YOUTUBE_COOKIES_FILE')
-            if cookies_path and os.path.exists(cookies_path):
-                yt_dlp_args.extend(["--cookies", cookies_path])
-                logging.info("Using YouTube cookies for authentication")
-            
-            # Convert args list to string format for spotdl 4.4.0 compatibility
-            if yt_dlp_args:
-                downloader_settings["yt_dlp_args"] = " ".join(yt_dlp_args)
-                logging.info(f"yt-dlp args: {downloader_settings['yt_dlp_args']}")
-            
-            # Initialize the downloader with enhanced settings
-            downloader = Downloader(settings=downloader_settings)
-            # --- END OF ENHANCED FIX ---
-            
-            downloaded_files_count = sum(1 for song in songs if downloader.download_song(song)[1])
-
-            if downloaded_files_count > 0:
-                if is_playlist:
-                    zip_filename_base = f"{sanitized_playlist_name}"
-                    zip_filepath = shutil.make_archive(os.path.join(session_folder, zip_filename_base), 'zip', download_path)
-                    final_filename = os.path.basename(zip_filepath)
-                    shutil.rmtree(download_path)
-                else:
-                    final_filename = os.listdir(session_folder)[0]
-                
-                logging.info(f"Successfully prepared '{final_filename}' for user '{user_name}'")
-                return render_template('index.html', download_link=True, user_name=user_name, session_id=session_id, filename=final_filename)
-            else:
-                flash('ERROR: Download failed. The URL might be invalid or protected.', 'danger')
-                shutil.rmtree(session_folder)
-
-        except Exception as e:
-            logging.error(f"An error occurred for user '{user_name}': {e}", exc_info=True)
-            flash(f'FATAL ERROR: {e}', 'danger')
-            if os.path.exists(session_folder):
-                shutil.rmtree(session_folder)
-
-        return redirect(url_for('index'))
-
     return render_template('index.html')
 
+@app.route('/cookies')
+def cookies_page():
+    """Cookie management page"""
+    cookie_files = []
+    
+    try:
+        for cookie_file in glob.glob(os.path.join(COOKIES_FOLDER, '*.txt')):
+            file_stat = os.stat(cookie_file)
+            age = datetime.now() - datetime.fromtimestamp(file_stat.st_ctime)
+            is_working, status = test_cookies_validity(cookie_file)
+            
+            cookie_files.append({
+                'filename': os.path.basename(cookie_file),
+                'age': f"{age.days} days, {age.seconds//3600} hours",
+                'size': f"{file_stat.st_size} bytes",
+                'working': is_working,
+                'status': status,
+                'uploaded': datetime.fromtimestamp(file_stat.st_ctime).strftime('%Y-%m-%d %H:%M')
+            })
+    except Exception as e:
+        logging.error(f"Error reading cookie files: {e}")
+    
+    # Sort by working status, then by age
+    cookie_files.sort(key=lambda x: (not x['working'], x['age']))
+    
+    return render_template('cookies.html', cookie_files=cookie_files)
+
+@app.route('/cookies/upload', methods=['POST'])
+def upload_cookies():
+    """Handle cookies file upload"""
+    if 'cookies_file' not in request.files:
+        flash('No file selected', 'danger')
+        return redirect(url_for('cookies_page'))
+    
+    file = request.files['cookies_file']
+    user_name = sanitize_name(request.form.get('uploader_name', 'anonymous'))
+    
+    if file.filename == '':
+        flash('No file selected', 'danger')
+        return redirect(url_for('cookies_page'))
+    
+    try:
+        # Read and validate file content
+        content = file.read().decode('utf-8')
+        is_valid, message = validate_cookies_file(content)
+        
+        if not is_valid:
+            flash(f'Invalid cookies file: {message}', 'danger')
+            return redirect(url_for('cookies_page'))
+        
+        # Save with timestamp and uploader name
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"{user_name}_{timestamp}_cookies.txt"
+        file_path = os.path.join(COOKIES_FOLDER, filename)
+        
+        with open(file_path, 'w') as f:
+            f.write(content)
+        
+        # Test the cookies
+        is_working, status = test_cookies_validity(file_path)
+        status_msg = "✅ Working" if is_working else f"⚠️ {status}"
+        
+        flash(f'Cookies uploaded successfully! Status: {status_msg}', 'success' if is_working else 'warning')
+        logging.info(f"New cookies uploaded by {user_name}: {filename} - {status}")
+        
+        # Refresh best cookies
+        setup_youtube_cookies()
+        
+    except Exception as e:
+        logging.error(f"Cookie upload failed: {e}")
+        flash(f'Upload failed: {str(e)}', 'danger')
+    
+    return redirect(url_for('cookies_page'))
+
+@app.route('/cookies/delete/<filename>')
+def delete_cookies(filename):
+    """Delete a cookies file"""
+    try:
+        file_path = os.path.join(COOKIES_FOLDER, filename)
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            flash(f'Deleted {filename}', 'success')
+            logging.info(f"Deleted cookies file: {filename}")
+            
+            # Refresh best cookies
+            setup_youtube_cookies()
+        else:
+            flash('File not found', 'danger')
+    except Exception as e:
+        logging.error(f"Failed to delete {filename}: {e}")
+        flash(f'Delete failed: {str(e)}', 'danger')
+    
+    return redirect(url_for('cookies_page'))
+
+@app.route('/process', methods=['POST'])
+def process_download():
+    """Process download with automatic cookie selection"""
+    url = request.form.get('url')
+    user_name = sanitize_name(request.form.get('name'))
+
+    if not url:
+        flash('ERROR: No URL provided.', 'danger')
+        return redirect(url_for('index'))
+
+    session_id = str(uuid.uuid4())
+    user_download_folder = os.path.join(DOWNLOAD_FOLDER, user_name)
+    session_folder = os.path.join(user_download_folder, session_id)
+    os.makedirs(session_folder, exist_ok=True)
+
+    try:
+        logging.info(f"Processing URL for user '{user_name}': {url} in session {session_id}")
+        client_id = os.environ.get('SPOTIFY_CLIENT_ID')
+        client_secret = os.environ.get('SPOTIFY_CLIENT_SECRET')
+
+        if not client_id or not client_secret:
+            raise ValueError("Spotify API credentials are not configured.")
+
+        # Initialize Spotdl for searching ONLY. It does not need proxy info.
+        spotify_client = Spotdl(
+            client_id=client_id,
+            client_secret=client_secret,
+            headless=True
+        )
+
+        songs = spotify_client.search([url])
+
+        if not songs:
+            flash('WARNING: Could not find any songs for the given URL.', 'warning')
+            shutil.rmtree(session_folder)
+            return redirect(url_for('index'))
+
+        is_playlist = len(songs) > 1
+        if is_playlist:
+            playlist_name = songs[0].album or songs[0].artist or "Playlist"
+            sanitized_playlist_name = "".join(c for c in playlist_name if c.isalnum() or c in (' ', '-')).rstrip()
+            download_path = os.path.join(session_folder, sanitized_playlist_name)
+            os.makedirs(download_path, exist_ok=True)
+            output_format = os.path.join(download_path, "{title} - {artist}.{output-ext}")
+        else:
+            output_format = os.path.join(session_folder, "{title} - {artist}.{output-ext}")
+
+        # --- ENHANCED PROXY + AUTOMATIC COOKIE SELECTION ---
+        downloader_settings = {"simple_tui": True, "output": output_format}
+        
+        # Build yt-dlp args list
+        yt_dlp_args = []
+        
+        # Add proxy settings if available
+        proxy_url = os.environ.get('PROXY_URL')
+        if proxy_url:
+            logging.info(f"Using proxy: {proxy_url}")
+            yt_dlp_args.extend([
+                "--proxy", proxy_url,
+                "--source-address", "0.0.0.0"
+            ])
+        else:
+            logging.warning("PROXY_URL not set. Proceeding without proxy.")
+        
+        # Add YouTube-specific fixes for recent restrictions
+        yt_dlp_args.extend([
+            "--socket-timeout", "30",
+            "--retries", "3",
+            "--fragment-retries", "3",
+            "--retry-sleep", "1",
+            "--no-abort-on-error",
+            "--ignore-errors",
+            "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ])
+        
+        # Use best available cookies
+        best_cookies = get_best_cookies()
+        if best_cookies:
+            yt_dlp_args.extend(["--cookies", best_cookies])
+            logging.info(f"Using cookies from: {best_cookies}")
+        else:
+            logging.warning("No cookies available - downloads may fail")
+        
+        # Convert args list to string format for spotdl 4.4.0 compatibility
+        if yt_dlp_args:
+            downloader_settings["yt_dlp_args"] = " ".join(yt_dlp_args)
+            logging.info(f"yt-dlp args: {downloader_settings['yt_dlp_args']}")
+        
+        # Initialize the downloader with enhanced settings
+        downloader = Downloader(settings=downloader_settings)
+        
+        downloaded_files_count = sum(1 for song in songs if downloader.download_song(song)[1])
+
+        if downloaded_files_count > 0:
+            if is_playlist:
+                zip_filename_base = f"{sanitized_playlist_name}"
+                zip_filepath = shutil.make_archive(os.path.join(session_folder, zip_filename_base), 'zip', download_path)
+                final_filename = os.path.basename(zip_filepath)
+                shutil.rmtree(download_path)
+            else:
+                final_filename = os.listdir(session_folder)[0]
+            
+            logging.info(f"Successfully prepared '{final_filename}' for user '{user_name}'")
+            return render_template('index.html', download_link=True, user_name=user_name, session_id=session_id, filename=final_filename)
+        else:
+            flash('ERROR: Download failed. The URL might be invalid or protected. Try uploading fresh cookies.', 'danger')
+            shutil.rmtree(session_folder)
+
+    except Exception as e:
+        logging.error(f"An error occurred for user '{user_name}': {e}", exc_info=True)
+        flash(f'FATAL ERROR: {e}', 'danger')
+        if os.path.exists(session_folder):
+            shutil.rmtree(session_folder)
+
+    return redirect(url_for('index'))
+
+# Keep all your existing routes (converter, downloads, etc.)
 @app.route('/converter', methods=['GET', 'POST'])
 def converter_page():
     if request.method == 'POST':
