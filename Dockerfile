@@ -9,7 +9,7 @@ COPY requirements.txt .
 
 # Install any needed packages specified in requirements.txt
 # We use --no-cache-dir to reduce image size
-# And we upgrade spotdl and yt-dlp to the latest versions
+# And we upgrade spotdl and yt-dlp to the latest versions to get the latest patches
 RUN pip install --no-cache-dir -r requirements.txt && \
     pip install --no-cache-dir --upgrade spotdl yt-dlp
 
@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
 # Copy the content of the local src directory to the working directory
 COPY . .
 
-# Make port 8000 available to the world outside this container
+# Make port 8080 available to the world outside this container
 EXPOSE 8080
 
 # Define environment variable for the Flask app
