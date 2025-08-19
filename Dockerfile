@@ -13,7 +13,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && \
     pip install --no-cache-dir --upgrade spotdl yt-dlp
 
-# Install ffmpeg which is required by spotdl
+# Install ffmpeg which is required by spotdl and pydub
 RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
 
 # Copy the content of the local src directory to the working directory
@@ -27,5 +27,4 @@ ENV FLASK_APP=main.py
 
 # Run the application using Gunicorn with an increased timeout
 # The --timeout 300 flag allows each worker up to 300 seconds to complete a request.
-# This is the key change to prevent crashes on long downloads.
 CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "4", "--timeout", "300", "--preload", "main:app"]

@@ -15,6 +15,10 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'a_secure_random_secret_key')
 
+# --- Tell pydub where to find ffmpeg ---
+# This is a critical fix for the converter on Railway
+AudioSegment.converter = "/usr/bin/ffmpeg"
+
 # --- Folder Setup ---
 DOWNLOAD_FOLDER = 'downloads'
 CONVERTER_UPLOADS = 'converter_uploads'
@@ -36,30 +40,21 @@ def cleanup_old_files():
     now = datetime.now()
     cutoff = now - timedelta(hours=12)
     
-    # Clean downloader session folders
-    try:
-        for user_folder_name in os.listdir(DOWNLOAD_FOLDER):
-            user_folder_path = os.path.join(DOWNLOAD_FOLDER, user_folder_name)
-            if os.path.isdir(user_folder_path):
-                for session_folder_name in os.listdir(user_folder_path):
-                    session_folder_path = os.path.join(user_folder_path, session_folder_name)
-                    if os.path.isdir(session_folder_path):
-                        if datetime.fromtimestamp(os.path.getctime(session_folder_path)) < cutoff:
-                            shutil.rmtree(session_folder_path)
-                            logging.info(f"Deleted old session folder: {session_folder_path}")
-    except Exception as e:
-        logging.error(f"Error during downloader cleanup: {e}")
-
-    # Clean converter temporary files
-    for folder in [CONVERTER_UPLOADS, CONVERTER_OUTPUT]:
+    # Clean downloader session folders and converter files
+    for base_folder in [DOWNLOAD_FOLDER, CONVERTER_UPLOADS, CONVERTER_OUTPUT]:
         try:
-            for filename in os.listdir(folder):
-                file_path = os.path.join(folder, filename)
-                if datetime.fromtimestamp(os.path.getctime(file_path)) < cutoff:
-                    os.remove(file_path)
-                    logging.info(f"Deleted old converter file: {file_path}")
+            for item_name in os.listdir(base_folder):
+                item_path = os.path.join(base_folder, item_name)
+                # Check creation time and delete if older than cutoff
+                if datetime.fromtimestamp(os.path.getctime(item_path)) < cutoff:
+                    if os.path.isdir(item_path):
+                        shutil.rmtree(item_path)
+                        logging.info(f"Deleted old folder: {item_path}")
+                    else:
+                        os.remove(item_path)
+                        logging.info(f"Deleted old file: {item_path}")
         except Exception as e:
-            logging.error(f"Error during {folder} cleanup: {e}")
+            logging.error(f"Error during cleanup of {base_folder}: {e}")
 
 scheduler = BackgroundScheduler(daemon=True)
 scheduler.add_job(cleanup_old_files, 'interval', hours=1)
@@ -89,7 +84,25 @@ def index():
             if not client_id or not client_secret:
                 raise ValueError("Spotify API credentials are not configured.")
 
-            spotify_client = Spotdl(client_id=client_id, client_secret=client_secret)
+            # --- ROBUST PROXY IMPLEMENTATION ---
+            # Initialize spotdl_args dictionary
+            spotdl_args = {
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "headless": True # Important for server environments
+            }
+            proxy_url = os.environ.get('PROXY_URL')
+            if proxy_url:
+                logging.info(f"Attempting to use proxy: {proxy_url}")
+                # Pass proxy directly during initialization
+                spotdl_args["proxy"] = proxy_url
+            else:
+                logging.warning("PROXY_URL not set. Proceeding without proxy.")
+            
+            # Initialize Spotdl with the arguments
+            spotify_client = Spotdl(**spotdl_args)
+            # --- END OF PROXY FIX ---
+
             songs = spotify_client.search([url])
 
             if not songs:
@@ -107,12 +120,10 @@ def index():
             else:
                 output_format = os.path.join(session_folder, "{title} - {artist}.{output-ext}")
 
+            # Note: The proxy is already set in the client, so we don't need yt_dlp_args here
             downloader_settings = {"simple_tui": True, "output": output_format}
-            proxy_url = os.environ.get('PROXY_URL')
-            if proxy_url:
-                downloader_settings["yt_dlp_args"] = f"--proxy {proxy_url} --source-address 0.0.0.0"
-
-            downloader = Downloader(settings=downloader_settings)
+            downloader = Downloader(settings=downloader_settings, spotdl_instance=spotify_client)
+            
             downloaded_files_count = sum(1 for song in songs if downloader.download_song(song)[1])
 
             if downloaded_files_count > 0:
@@ -160,13 +171,12 @@ def converter_page():
             return redirect(request.url)
 
         if file:
+            # Use a unique ID for filenames to prevent conflicts
+            temp_id = str(uuid.uuid4())
+            upload_path = os.path.join(CONVERTER_UPLOADS, temp_id)
+            
             try:
-                # Save uploaded file temporarily
-                original_filename = str(uuid.uuid4())
-                upload_path = os.path.join(CONVERTER_UPLOADS, original_filename)
                 file.save(upload_path)
-
-                # Convert file
                 logging.info(f"Converting {file.filename} to {target_format}")
                 audio = AudioSegment.from_file(upload_path)
                 
@@ -180,6 +190,10 @@ def converter_page():
                 logging.error(f"Conversion failed: {e}", exc_info=True)
                 flash(f"ERROR: Conversion failed. The uploaded file may not be a valid audio format. Details: {e}", 'danger')
                 return redirect(request.url)
+            finally:
+                # Clean up the temporary uploaded file
+                if os.path.exists(upload_path):
+                    os.remove(upload_path)
 
     return render_template('converter.html')
 
