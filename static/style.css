@@ -174,3 +174,7 @@ footer a:hover {
 .download-list-group .list-group-item strong {
     color: var(--accent-color);
 }
+
+.card .text-muted {
+    color: rgba(255, 255, 255, 0.8) !important;
+}
