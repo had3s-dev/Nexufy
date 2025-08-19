@@ -1,24 +1,28 @@
 {% extends "layout.html" %}
-{% block title %}Downloader - Nostromo{% endblock %}
+{% block title %}Converter - Nostromo{% endblock %}
 {% block content %}
 <div class="row justify-content-center">
     <div class="col-lg-8 col-md-10">
         <div class="card p-4 p-md-5">
             <div class="card-body text-center">
-                <h1 class="card-title mb-3">Signal Acquisition</h1>
+                <h1 class="card-title mb-3">Audio Re-Sequencer</h1>
                 <p class="text-muted mb-4">
-                    Input Spotify signal URL for audio extraction.
-                    <br>Multi-signal sources (playlists/albums) will be compressed into a single data packet (.zip).
+                    Upload an audio file to re-sequence its data format.
                 </p>
 
-                <form action="/" method="POST" id="downloadForm">
+                <form action="{{ url_for('converter_page') }}" method="POST" enctype="multipart/form-data" id="converterForm">
                     <div class="mb-3">
-                        <input type="text" class="form-control form-control-lg text-center" name="name" placeholder="Enter Callsign (Optional)">
+                        <input type="file" class="form-control form-control-lg" name="file" required>
                     </div>
                     <div class="input-group mb-3">
-                        <input type="url" class="form-control form-control-lg" name="url" placeholder="Enter Signal URL: https://open.spotify.com/..." required>
-                        <button class="btn btn-primary px-4" type="submit" id="downloadButton">
-                            <span id="button-text">EXTRACT</span>
+                        <select class="form-select form-select-lg" name="format">
+                            <option value="mp3">to MP3</option>
+                            <option value="wav">to WAV</option>
+                            <option value="flac">to FLAC</option>
+                            <option value="ogg">to OGG</option>
+                        </select>
+                        <button class="btn btn-primary px-4" type="submit" id="convertButton">
+                            <span id="button-text">SEQUENCE</span>
                             <span id="loading-spinner" class="spinner-border spinner-border-sm d-none" role="status"></span>
                         </button>
                     </div>
@@ -34,12 +38,12 @@
                     {% endif %}
                 {% endwith %}
 
-                {% if download_link and filename %}
+                {% if conversion_complete and filename %}
                 <div class="alert alert-success mt-4">
-                    <h4 class="alert-heading">Extraction Complete</h4>
+                    <h4 class="alert-heading">Re-Sequencing Complete</h4>
                     <hr>
-                    <a href="{{ url_for('download_file', user_name=user_name, session_id=session_id, filename=filename) }}" class="btn btn-success btn-lg">
-                        Download Packet: {{ filename }}
+                    <a href="{{ url_for('download_converted_file', filename=filename) }}" class="btn btn-success btn-lg">
+                        Download Sequenced File: {{ filename }}
                     </a>
                 </div>
                 {% endif %}
@@ -50,12 +54,12 @@
 {% endblock %}
 {% block scripts %}
 <script>
-    document.getElementById('downloadForm').addEventListener('submit', function() {
-        const downloadButton = document.getElementById('downloadButton');
+    document.getElementById('converterForm').addEventListener('submit', function() {
+        const convertButton = document.getElementById('convertButton');
         const buttonText = document.getElementById('button-text');
         const loadingSpinner = document.getElementById('loading-spinner');
-        downloadButton.disabled = true;
-        buttonText.textContent = 'EXTRACTING...';
+        convertButton.disabled = true;
+        buttonText.textContent = 'SEQUENCING...';
         loadingSpinner.classList.remove('d-none');
     });
 </script>
