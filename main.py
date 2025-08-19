@@ -95,9 +95,12 @@ def index():
             # --- FINAL PROXY IMPLEMENTATION ---
             proxy_url = os.environ.get('PROXY_URL')
             if proxy_url:
-                logging.info(f"Using proxy: {proxy_url}")
-                # The value for 'yt_dlp_args' must be a single string.
-                downloader_settings["yt_dlp_args"] = f"--proxy {proxy_url}"
+                logging.info(f"Attempting to use proxy: {proxy_url}")
+                # Pass the proxy argument this way to be safer and more explicit.
+                # The '--source-address 0.0.0.0' can help in containerized environments.
+                downloader_settings["yt_dlp_args"] = f"--proxy {proxy_url} --source-address 0.0.0.0"
+            else:
+                logging.warning("PROXY_URL environment variable not set. Proceeding without proxy.")
             # --- END OF CORRECTION ---
 
             downloader = Downloader(settings=downloader_settings)
