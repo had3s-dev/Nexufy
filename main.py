@@ -11,6 +11,10 @@ import logging
 # Set up basic logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+# THIS IS A TEST TO CONFIRM THE LATEST CODE IS RUNNING
+logging.critical("--- RUNNING LATEST CODE VERSION ---") 
+# THIS IS A TEST TO CONFIRM THE LATEST CODE IS RUNNING
+
 # Initialize Flask App
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'a_secure_random_secret_key')
@@ -23,12 +27,20 @@ if not os.path.exists(DOWNLOAD_FOLDER):
 # --- Spotdl Downloader Setup ---
 def get_spotdl_instance():
     """Initializes and returns a Spotdl instance with proxy configuration."""
+    # Fetch required Spotify credentials from environment variables
+    client_id = os.environ.get('SPOTIFY_CLIENT_ID')
+    client_secret = os.environ.get('SPOTIFY_CLIENT_SECRET')
     proxy_url = os.environ.get('PROXY_URL')
-    
-    # Initialize Spotdl with no arguments, as the constructor is strict.
-    spotdl = Spotdl()
 
-    # Configure all settings on the instance's `args` property after initialization.
+    if not client_id or not client_secret:
+        logging.error("SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET environment variables are not set.")
+        # We raise an exception here because the app cannot function without them.
+        raise ValueError("Spotify API credentials are not configured.")
+
+    # Initialize Spotdl with the required credentials.
+    spotdl = Spotdl(client_id=client_id, client_secret=client_secret)
+
+    # Configure other settings on the instance's `args` property after initialization.
     config = {
         "output": "{title} - {artist}.{output-ext}",
         "format": "mp3",
@@ -79,7 +91,7 @@ def index():
     On POST, it processes the URL, downloads the audio, and provides a link.
     """
     if request.method == 'POST':
-        url = request.form.get('url')
+        url = a = request.form.get('url')
         if not url:
             flash('Please provide a Spotify or YouTube URL.', 'danger')
             return redirect(url_for('index'))
