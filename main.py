@@ -32,7 +32,6 @@ def cleanup_old_folders():
     now = datetime.now()
     cutoff = now - timedelta(hours=12)
     try:
-        # We now have user folders, so we need to go one level deeper
         for user_folder_name in os.listdir(DOWNLOAD_FOLDER):
             user_folder_path = os.path.join(DOWNLOAD_FOLDER, user_folder_name)
             if os.path.isdir(user_folder_path):
@@ -65,7 +64,6 @@ def index():
             return redirect(url_for('index'))
 
         session_id = str(uuid.uuid4())
-        # Create a user-specific folder to store their downloads
         user_download_folder = os.path.join(DOWNLOAD_FOLDER, user_name)
         session_folder = os.path.join(user_download_folder, session_id)
         os.makedirs(session_folder, exist_ok=True)
@@ -98,12 +96,23 @@ def index():
                 output_format = os.path.join(session_folder, "{title} - {artist}.{output-ext}")
 
             downloader_settings = {"simple_tui": True, "output": output_format}
+
+            # --- START OF CORRECTED PROXY IMPLEMENTATION ---
             proxy_url = os.environ.get('PROXY_URL')
             if proxy_url:
+                logging.info(f"Attempting to use proxy: {proxy_url}")
                 downloader_settings["yt_dlp_args"] = f"--proxy {proxy_url} --source-address 0.0.0.0"
+            else:
+                logging.warning("PROXY_URL environment variable not set. Proceeding without a proxy.")
+            # --- END OF CORRECTED PROXY IMPLEMENTATION ---
 
             downloader = Downloader(settings=downloader_settings)
-            downloaded_files_count = sum(1 for song in songs if downloader.download_song(song)[1])
+            
+            downloaded_files_count = 0
+            for song in songs:
+                _, path = downloader.download_song(song)
+                if path:
+                    downloaded_files_count += 1
 
             if downloaded_files_count > 0:
                 if is_playlist:
@@ -115,7 +124,6 @@ def index():
                     final_filename = os.listdir(session_folder)[0]
                 
                 logging.info(f"Successfully prepared '{final_filename}' for user '{user_name}'")
-                # We now pass the user_name to the download link
                 return render_template('index.html', download_link=True, user_name=user_name, session_id=session_id, filename=final_filename)
             else:
                 flash('Download failed. The URL might be invalid or protected.', 'danger')
@@ -152,7 +160,6 @@ def downloads_page():
                                 'filename': filename,
                                 'timestamp': creation_time
                             })
-                # Sort files for each user by most recent first
                 user_files.sort(key=lambda x: x['timestamp'], reverse=True)
                 if user_files:
                     all_downloads.append({'user': user_name, 'files': user_files})
@@ -165,7 +172,6 @@ def downloads_page():
 @app.route('/download/<user_name>/<session_id>/<filename>')
 def download_file(user_name, session_id, filename):
     """Serves the downloaded file to the user."""
-    # The path now includes the user's name
     directory = os.path.join(DOWNLOAD_FOLDER, user_name, session_id)
     logging.info(f"Serving file: {filename} for user: {user_name}")
     return send_from_directory(directory, filename, as_attachment=True)
