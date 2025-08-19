@@ -2,6 +2,7 @@ import os
 import uuid
 import shutil
 from datetime import datetime, timedelta
+from urllib.parse import urlparse, quote
 from flask import Flask, render_template, request, send_from_directory, flash, redirect, url_for
 from spotdl import Spotdl
 from spotdl.download.downloader import Downloader # Correct import for the downloader class
@@ -71,8 +72,7 @@ def index():
             # --- Setup Spotdl Client and Downloader ---
             client_id = os.environ.get('SPOTIFY_CLIENT_ID')
             client_secret = os.environ.get('SPOTIFY_CLIENT_SECRET')
-            proxy_url = os.environ.get('PROXY_URL')
-
+            
             if not client_id or not client_secret:
                 raise ValueError("Spotify API credentials are not configured.")
 
@@ -87,14 +87,33 @@ def index():
                 return redirect(url_for('index'))
 
             # 2. The Downloader class handles the actual download process.
-            # Corrected: Added 'simple_tui' to disable the rich progress bar in a server environment.
-            downloader_settings = {
-                "simple_tui": True
-            }
-            if proxy_url:
-                downloader_settings["proxy"] = proxy_url
-                logging.info(f"Using proxy: {proxy_url}")
+            downloader_settings = { "simple_tui": True }
             
+            # Corrected: Parse and URL-encode proxy credentials if they exist
+            proxy_url_raw = os.environ.get('PROXY_URL')
+            if proxy_url_raw:
+                try:
+                    parsed_proxy = urlparse(proxy_url_raw)
+                    if parsed_proxy.username:
+                        encoded_username = quote(parsed_proxy.username)
+                        encoded_password = quote(parsed_proxy.password) if parsed_proxy.password else ''
+                        credentials = f"{encoded_username}"
+                        if encoded_password:
+                            credentials += f":{encoded_password}"
+                        netloc = f"{credentials}@{parsed_proxy.hostname}"
+                        if parsed_proxy.port:
+                            netloc += f":{parsed_proxy.port}"
+                        encoded_proxy_url = parsed_proxy._replace(netloc=netloc).geturl()
+                        downloader_settings["proxy"] = encoded_proxy_url
+                        logging.info(f"Using URL-encoded proxy: {encoded_proxy_url}")
+                    else:
+                        downloader_settings["proxy"] = proxy_url_raw
+                        logging.info(f"Using proxy as-is: {proxy_url_raw}")
+                except Exception:
+                    # Fallback for malformed URLs
+                    downloader_settings["proxy"] = proxy_url_raw
+                    logging.warning(f"Could not parse proxy URL, using raw value: {proxy_url_raw}")
+
             downloader = Downloader(settings=downloader_settings)
 
             # 3. Iterate and download each song individually, passing the output path.
@@ -102,11 +121,10 @@ def index():
             output_format = os.path.join(session_folder, "{title} - {artist}.{output-ext}")
 
             for song in songs:
-                # The download_song method now returns a tuple (song, path)
                 _, path = downloader.download_song(song, output_format)
                 if path:
                     downloaded_file = os.path.basename(path)
-                    break # We only handle the first file for simplicity
+                    break 
 
             if downloaded_file:
                 logging.info(f"Successfully downloaded: {downloaded_file}")
@@ -116,12 +134,12 @@ def index():
                                        filename=downloaded_file)
             else:
                 flash('Download failed. The URL might be invalid or protected.', 'danger')
-                shutil.rmtree(session_folder) # Clean up empty folder
+                shutil.rmtree(session_folder)
 
         except Exception as e:
             logging.error(f"An error occurred during download for session {session_id}: {e}", exc_info=True)
             flash(f'An unexpected error occurred: {e}', 'danger')
-            shutil.rmtree(session_folder) # Clean up on error
+            shutil.rmtree(session_folder)
 
         return redirect(url_for('index'))
 
