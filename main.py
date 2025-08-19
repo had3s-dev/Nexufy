@@ -87,23 +87,21 @@ def index():
                 return redirect(url_for('index'))
 
             # 2. The Downloader class handles the actual download process.
-            # Corrected: 'format' is removed from the constructor as it's not a valid argument.
-            # The library defaults to mp3.
-            downloader_settings = {
-                "log_level": "INFO",
-            }
+            # Corrected: All unsupported arguments are removed from the constructor.
+            downloader_settings = {}
             if proxy_url:
                 downloader_settings["proxy"] = proxy_url
                 logging.info(f"Using proxy: {proxy_url}")
             
-            downloader = Downloader(**downloader_settings)
+            downloader = Downloader(settings=downloader_settings)
 
             # 3. Iterate and download each song individually, passing the output path.
             downloaded_file = None
             output_format = os.path.join(session_folder, "{title} - {artist}.{output-ext}")
 
             for song in songs:
-                path = downloader.download_song(song, output_format)
+                # The download_song method now returns a tuple (song, path)
+                _, path = downloader.download_song(song, output_format)
                 if path:
                     downloaded_file = os.path.basename(path)
                     break # We only handle the first file for simplicity
