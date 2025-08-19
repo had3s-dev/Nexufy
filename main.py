@@ -52,16 +52,15 @@ DOWNLOADER_OPTIONS: DownloaderOptions = {
     'output': os.getenv(
         'OUTPUT_PATH', default='/downloads/{artists} - {title}.{output-ext}'
     ),
-    'ffmpeg': '/usr/bin/ffmpeg',  # Use system ffmpeg instead of downloaded one
+    'ffmpeg': '/usr/bin/ffmpeg',
     'audio_providers': ['youtube-music', 'youtube'],
     'lyrics_providers': ['genius', 'azlyrics'],
     'generate_lrc': False,
     'overwrite': 'skip',
     'restrict_filenames': False,
     'print_errors': True,
-    # Remove problematic options that might not exist
-    # 'download_timeout': 30,  
-    # 'max_retries': 2,        
+    # This line tells your app to use the proxy
+    'proxy': os.getenv('PROXY_URL', None)
 }
 
 
