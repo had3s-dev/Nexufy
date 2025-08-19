@@ -112,13 +112,20 @@ def download_songs_sync(spotdlc, songs):
     results = []
     for song in songs:
         try:
-            result = spotdlc.downloader.search_and_download(song)
-            results.append(f"✅ Downloaded: {song.display_name}")
+            print(f"Attempting to download: {song.display_name}")
+            # The result is a tuple (song, path), we don't need the path here
+            song_object, download_path = spotdlc.downloader.search_and_download(song)
+            if download_path:
+                 results.append(f"✅ Downloaded: {song.display_name}")
+            else:
+                results.append(f"❌ Failed to download {song.display_name}: No download path returned.")
         except Exception as e:
             # Log the specific error and continue with next song
-            error_msg = f"❌ Failed to download {song.display_name}: {str(e)}"
+            error_msg = f"❌ Failed to download {song.display_name}: {e}"
             results.append(error_msg)
-            print(f"Download error for {song.display_name}: {e}")
+            print(f"Detailed download error for {song.display_name}:")
+            import traceback
+            traceback.print_exc()
     return results
 
 
@@ -208,18 +215,20 @@ async def download(
     """
     try:
         songs = spotdlc.search([url])
-        # Run download in a separate thread with timeout
+        # Run download in a separate thread with a longer timeout
         loop = asyncio.get_event_loop()
         with ThreadPoolExecutor() as executor:
             await asyncio.wait_for(
                 loop.run_in_executor(executor, download_songs_sync, spotdlc, songs),
-                timeout=60.0
+                timeout=120.0  # Increased timeout to 120 seconds
             )
-        return {'message': 'Download sucessful'}
+        return {'message': 'Download successful'}
     except asyncio.TimeoutError:
-        return {'detail': 'Download timed out after 60 seconds'}
+        return JSONResponse(status_code=408, content={'detail': 'Download timed out after 120 seconds'})
     except Exception as error:  # pragma: no cover
-        return {'detail': str(error)}
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={'detail': str(error)})
 
 
 @app.get(
