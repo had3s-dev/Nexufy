@@ -4,16 +4,13 @@ import shutil
 from datetime import datetime, timedelta
 from flask import Flask, render_template, request, send_from_directory, flash, redirect, url_for
 from spotdl import Spotdl
+from spotdl.download.downloader import Downloader # Correct import for the downloader class
 from apscheduler.schedulers.background import BackgroundScheduler
 import logging
 
 # --- Configuration ---
 # Set up basic logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-# THIS IS A TEST TO CONFIRM THE LATEST CODE IS RUNNING
-logging.critical("--- RUNNING LATEST CODE VERSION ---") 
-# THIS IS A TEST TO CONFIRM THE LATEST CODE IS RUNNING
 
 # Initialize Flask App
 app = Flask(__name__)
@@ -23,39 +20,6 @@ app.secret_key = os.environ.get('SECRET_KEY', 'a_secure_random_secret_key')
 DOWNLOAD_FOLDER = 'downloads'
 if not os.path.exists(DOWNLOAD_FOLDER):
     os.makedirs(DOWNLOAD_FOLDER)
-
-# --- Spotdl Downloader Setup ---
-def get_spotdl_instance():
-    """Initializes and returns a Spotdl instance with proxy configuration."""
-    # Fetch required Spotify credentials from environment variables
-    client_id = os.environ.get('SPOTIFY_CLIENT_ID')
-    client_secret = os.environ.get('SPOTIFY_CLIENT_SECRET')
-    proxy_url = os.environ.get('PROXY_URL')
-
-    if not client_id or not client_secret:
-        logging.error("SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET environment variables are not set.")
-        # We raise an exception here because the app cannot function without them.
-        raise ValueError("Spotify API credentials are not configured.")
-
-    # Initialize Spotdl with the required credentials.
-    spotdl = Spotdl(client_id=client_id, client_secret=client_secret)
-
-    # Configure other settings on the instance's `args` property after initialization.
-    config = {
-        "output": "{title} - {artist}.{output-ext}",
-        "format": "mp3",
-        "log_level": "INFO",
-    }
-
-    if proxy_url:
-        config["proxy"] = proxy_url
-        logging.info(f"Using proxy: {proxy_url}")
-    else:
-        logging.warning("No PROXY_URL environment variable found. Running without a proxy.")
-    
-    spotdl.args.update(config)
-        
-    return spotdl
 
 # --- Background Cleanup Scheduler ---
 def cleanup_old_folders():
@@ -91,7 +55,7 @@ def index():
     On POST, it processes the URL, downloads the audio, and provides a link.
     """
     if request.method == 'POST':
-        url = a = request.form.get('url')
+        url = request.form.get('url')
         if not url:
             flash('Please provide a Spotify or YouTube URL.', 'danger')
             return redirect(url_for('index'))
@@ -103,21 +67,39 @@ def index():
 
         try:
             logging.info(f"Processing URL: {url} in session {session_id}")
-            spotdl = get_spotdl_instance()
+
+            # --- Setup Spotdl Client and Downloader ---
+            client_id = os.environ.get('SPOTIFY_CLIENT_ID')
+            client_secret = os.environ.get('SPOTIFY_CLIENT_SECRET')
+            proxy_url = os.environ.get('PROXY_URL')
+
+            if not client_id or not client_secret:
+                raise ValueError("Spotify API credentials are not configured.")
+
+            # 1. The Spotdl class is now used only for searching.
+            spotify_client = Spotdl(client_id=client_id, client_secret=client_secret)
             
-            # Change output directory for this specific download
-            # This correctly combines the session folder with the output format string
-            spotdl.args['output'] = os.path.join(session_folder, spotdl.args['output'])
-            
-            songs = spotdl.search([url])
+            songs = spotify_client.search([url])
             
             if not songs:
                 flash('Could not find any songs for the given URL. Please check the link.', 'warning')
                 shutil.rmtree(session_folder)
                 return redirect(url_for('index'))
 
-            # Download the songs
-            results = spotdl.download_songs(songs)
+            # 2. The Downloader class handles the actual download process.
+            downloader_settings = {
+                "output": os.path.join(session_folder, "{title} - {artist}.{output-ext}"),
+                "format": "mp3",
+                "log_level": "INFO",
+            }
+            if proxy_url:
+                downloader_settings["proxy"] = proxy_url
+                logging.info(f"Using proxy: {proxy_url}")
+            
+            downloader = Downloader(**downloader_settings)
+
+            # 3. Download the songs using the downloader instance.
+            results = downloader.download_songs(songs)
             
             # Find the first successfully downloaded song
             downloaded_file = None
@@ -154,7 +136,7 @@ def download_file(session_id, filename):
     return send_from_directory(directory, filename, as_attachment=True)
 
 
-@app.errorhandler(404)
+@app.errorhandler(44)
 def page_not_found(e):
     """Custom 404 error handler."""
     return render_template('index.html', error="404: Page not found."), 404
