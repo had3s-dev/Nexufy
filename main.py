@@ -7,19 +7,23 @@ from spotdl import Spotdl
 from spotdl.download.downloader import Downloader
 from apscheduler.schedulers.background import BackgroundScheduler
 import logging
+import re
 
 # --- Configuration ---
-# Set up basic logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-# Initialize Flask App
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'a_secure_random_secret_key')
-
-# Configuration for file downloads
 DOWNLOAD_FOLDER = 'downloads'
 if not os.path.exists(DOWNLOAD_FOLDER):
     os.makedirs(DOWNLOAD_FOLDER)
+
+# --- Helper Functions ---
+def sanitize_name(name):
+    """Sanitizes a string to be used as a directory name."""
+    if not name:
+        return "guest"
+    # Remove invalid characters and limit length
+    return re.sub(r'[^a-zA-Z0-9_-]', '', name).strip()[:50] or "guest"
 
 # --- Background Cleanup Scheduler ---
 def cleanup_old_folders():
@@ -27,22 +31,24 @@ def cleanup_old_folders():
     logging.info("Running scheduled cleanup of old download folders...")
     now = datetime.now()
     cutoff = now - timedelta(hours=12)
-
     try:
-        for folder_name in os.listdir(DOWNLOAD_FOLDER):
-            folder_path = os.path.join(DOWNLOAD_FOLDER, folder_name)
-            if os.path.isdir(folder_path):
-                try:
-                    folder_creation_time = datetime.fromtimestamp(os.path.getctime(folder_path))
-                    if folder_creation_time < cutoff:
-                        shutil.rmtree(folder_path)
-                        logging.info(f"Deleted old folder: {folder_path}")
-                except Exception as e:
-                    logging.error(f"Error processing folder {folder_path}: {e}")
+        # We now have user folders, so we need to go one level deeper
+        for user_folder_name in os.listdir(DOWNLOAD_FOLDER):
+            user_folder_path = os.path.join(DOWNLOAD_FOLDER, user_folder_name)
+            if os.path.isdir(user_folder_path):
+                for session_folder_name in os.listdir(user_folder_path):
+                    session_folder_path = os.path.join(user_folder_path, session_folder_name)
+                    if os.path.isdir(session_folder_path):
+                        try:
+                            folder_creation_time = datetime.fromtimestamp(os.path.getctime(session_folder_path))
+                            if folder_creation_time < cutoff:
+                                shutil.rmtree(session_folder_path)
+                                logging.info(f"Deleted old session folder: {session_folder_path}")
+                        except Exception as e:
+                            logging.error(f"Error processing folder {session_folder_path}: {e}")
     except Exception as e:
         logging.error(f"An error occurred during cleanup: {e}")
 
-# Initialize and start the scheduler
 scheduler = BackgroundScheduler(daemon=True)
 scheduler.add_job(cleanup_old_folders, 'interval', hours=1)
 scheduler.start()
@@ -50,82 +56,73 @@ scheduler.start()
 # --- Flask Routes ---
 @app.route('/', methods=['GET', 'POST'])
 def index():
-    """
-    Handles the main page logic.
-    On POST, it processes the URL, downloads the audio, and provides a link.
-    """
     if request.method == 'POST':
         url = request.form.get('url')
+        user_name = sanitize_name(request.form.get('name'))
+
         if not url:
             flash('Please provide a Spotify or YouTube URL.', 'danger')
             return redirect(url_for('index'))
 
-        # Create a unique session folder for the download
         session_id = str(uuid.uuid4())
-        session_folder = os.path.join(DOWNLOAD_FOLDER, session_id)
+        # Create a user-specific folder to store their downloads
+        user_download_folder = os.path.join(DOWNLOAD_FOLDER, user_name)
+        session_folder = os.path.join(user_download_folder, session_id)
         os.makedirs(session_folder, exist_ok=True)
 
         try:
-            logging.info(f"Processing URL: {url} in session {session_id}")
+            logging.info(f"Processing URL for user '{user_name}': {url} in session {session_id}")
 
-            # --- Setup Spotdl Client and Downloader ---
             client_id = os.environ.get('SPOTIFY_CLIENT_ID')
             client_secret = os.environ.get('SPOTIFY_CLIENT_SECRET')
 
             if not client_id or not client_secret:
                 raise ValueError("Spotify API credentials are not configured.")
 
-            # 1. The Spotdl class is now used only for searching.
             spotify_client = Spotdl(client_id=client_id, client_secret=client_secret)
-
             songs = spotify_client.search([url])
 
             if not songs:
-                flash('Could not find any songs for the given URL. Please check the link.', 'warning')
+                flash('Could not find any songs. Please check the link.', 'warning')
                 shutil.rmtree(session_folder)
                 return redirect(url_for('index'))
 
-            # 2. The Downloader class handles the actual download process.
-            output_format = os.path.join(session_folder, "{title} - {artist}.{output-ext}")
-            downloader_settings = {
-                "simple_tui": True,
-                "output": output_format,
-            }
+            is_playlist = len(songs) > 1
+            if is_playlist:
+                playlist_name = songs[0].album or songs[0].artist or "Playlist"
+                sanitized_playlist_name = "".join(c for c in playlist_name if c.isalnum() or c in (' ', '-')).rstrip()
+                download_path = os.path.join(session_folder, sanitized_playlist_name)
+                os.makedirs(download_path, exist_ok=True)
+                output_format = os.path.join(download_path, "{title} - {artist}.{output-ext}")
+            else:
+                output_format = os.path.join(session_folder, "{title} - {artist}.{output-ext}")
 
-            # --- FINAL PROXY IMPLEMENTATION ---
+            downloader_settings = {"simple_tui": True, "output": output_format}
             proxy_url = os.environ.get('PROXY_URL')
             if proxy_url:
-                logging.info(f"Attempting to use proxy: {proxy_url}")
-                # Pass the proxy argument this way to be safer and more explicit.
-                # The '--source-address 0.0.0.0' can help in containerized environments.
                 downloader_settings["yt_dlp_args"] = f"--proxy {proxy_url} --source-address 0.0.0.0"
-            else:
-                logging.warning("PROXY_URL environment variable not set. Proceeding without proxy.")
-            # --- END OF CORRECTION ---
 
             downloader = Downloader(settings=downloader_settings)
+            downloaded_files_count = sum(1 for song in songs if downloader.download_song(song)[1])
 
-            # 3. Iterate and download each song individually.
-            downloaded_file = None
-
-            for song in songs:
-                _, path = downloader.download_song(song)
-                if path:
-                    downloaded_file = os.path.basename(path)
-                    break
-
-            if downloaded_file:
-                logging.info(f"Successfully downloaded: {downloaded_file}")
-                return render_template('index.html',
-                                       download_link=True,
-                                       session_id=session_id,
-                                       filename=downloaded_file)
+            if downloaded_files_count > 0:
+                if is_playlist:
+                    zip_filename_base = f"{sanitized_playlist_name}"
+                    zip_filepath = shutil.make_archive(os.path.join(session_folder, zip_filename_base), 'zip', download_path)
+                    final_filename = os.path.basename(zip_filepath)
+                    shutil.rmtree(download_path)
+                else:
+                    final_filename = os.listdir(session_folder)[0]
+                
+                logging.info(f"Successfully prepared '{final_filename}' for user '{user_name}'")
+                # We now pass the user_name to the download link
+                return render_template('index.html', download_link=True, user_name=user_name, session_id=session_id, filename=final_filename)
             else:
                 flash('Download failed. The URL might be invalid or protected.', 'danger')
                 shutil.rmtree(session_folder)
 
         except Exception as e:
-            logging.error(f"An error occurred during download for session {session_id}: {e}", exc_info=True)
+            logging.error(f"An error occurred for user '{user_name}': {e}", exc_info=True)
             flash(f'An unexpected error occurred: {e}', 'danger')
             if os.path.exists(session_folder):
                 shutil.rmtree(session_folder)
@@ -134,21 +131,48 @@ def index():
 
     return render_template('index.html')
 
+@app.route('/downloads')
+def downloads_page():
+    """Displays a list of all available downloads, sorted by user and time."""
+    all_downloads = []
+    try:
+        for user_name in sorted(os.listdir(DOWNLOAD_FOLDER)):
+            user_folder_path = os.path.join(DOWNLOAD_FOLDER, user_name)
+            if os.path.isdir(user_folder_path):
+                user_files = []
+                for session_id in os.listdir(user_folder_path):
+                    session_folder_path = os.path.join(user_folder_path, session_id)
+                    if os.path.isdir(session_folder_path):
+                        for filename in os.listdir(session_folder_path):
+                            file_path = os.path.join(session_folder_path, filename)
+                            creation_time = datetime.fromtimestamp(os.path.getctime(session_folder_path))
+                            user_files.append({
+                                'user_name': user_name,
+                                'session_id': session_id,
+                                'filename': filename,
+                                'timestamp': creation_time
+                            })
+                # Sort files for each user by most recent first
+                user_files.sort(key=lambda x: x['timestamp'], reverse=True)
+                if user_files:
+                    all_downloads.append({'user': user_name, 'files': user_files})
+    except Exception as e:
+        logging.error(f"Error reading download directory: {e}")
+        flash("Could not load download history.", "danger")
 
-@app.route('/download/<session_id>/<filename>')
-def download_file(session_id, filename):
+    return render_template('downloads.html', downloads_by_user=all_downloads)
+
+@app.route('/download/<user_name>/<session_id>/<filename>')
+def download_file(user_name, session_id, filename):
     """Serves the downloaded file to the user."""
-    directory = os.path.join(DOWNLOAD_FOLDER, session_id)
-    logging.info(f"Serving file: {filename} from session: {session_id}")
+    # The path now includes the user's name
+    directory = os.path.join(DOWNLOAD_FOLDER, user_name, session_id)
+    logging.info(f"Serving file: {filename} for user: {user_name}")
     return send_from_directory(directory, filename, as_attachment=True)
-
 
 @app.errorhandler(404)
 def page_not_found(e):
-    """Custom 404 error handler."""
-    return render_template('index.html', error="404: Page not found."), 404
-
+    return render_template('404.html'), 404
 
 if __name__ == '__main__':
-    # Note: This is for local development. Use Gunicorn for production.
     app.run(host='0.0.0.0', port=5000, debug=True)

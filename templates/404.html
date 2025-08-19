@@ -1,0 +1,20 @@
+{% extends "layout.html" %}
+
+{% block title %}Page Not Found - Melody Fetch{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-8 col-md-10">
+        <div class="card shadow-lg p-4 p-md-5 text-center">
+            <div class="card-body">
+                <h1 class="card-title mb-3" style="font-size: 5rem;">404</h1>
+                <h2 class="mb-4">Lost in the Echo?</h2>
+                <p class="text-muted mb-4">
+                    It seems you've wandered off the beaten path. The page you're looking for isn't here.
+                </p>
+                <a href="{{ url_for('index') }}" class="btn btn-primary">Return to the Studio</a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
