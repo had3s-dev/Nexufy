@@ -59,8 +59,9 @@ DOWNLOADER_OPTIONS: DownloaderOptions = {
     'overwrite': 'skip',
     'restrict_filenames': False,
     'print_errors': True,
-    'download_timeout': 30,  # 30 second timeout
-    'max_retries': 2,        # Retry failed downloads
+    # Remove problematic options that might not exist
+    # 'download_timeout': 30,  
+    # 'max_retries': 2,        
 }
 
 
@@ -111,31 +112,13 @@ def download_songs_sync(spotdlc, songs):
     results = []
     for song in songs:
         try:
-            # Add timeout for individual song downloads
-            import signal
-            
-            def timeout_handler(signum, frame):
-                raise TimeoutError("Download timed out")
-            
-            # Set a 60-second timeout per song
-            signal.signal(signal.SIGALRM, timeout_handler)
-            signal.alarm(60)
-            
             result = spotdlc.downloader.search_and_download(song)
-            signal.alarm(0)  # Cancel the alarm
             results.append(f"✅ Downloaded: {song.display_name}")
-            
-        except TimeoutError:
-            results.append(f"⏰ Download timed out: {song.display_name}")
-            print(f"Download timeout for {song.display_name}")
         except Exception as e:
             # Log the specific error and continue with next song
             error_msg = f"❌ Failed to download {song.display_name}: {str(e)}"
             results.append(error_msg)
             print(f"Download error for {song.display_name}: {e}")
-        finally:
-            signal.alarm(0)  # Make sure to cancel any remaining alarms
-            
     return results
 
 
@@ -145,7 +128,7 @@ def download_songs_sync(spotdlc, songs):
     tags=['Downloader'],
     summary='Download one or more songs from a playlist via the WEB interface',
 )
-async def download_web_ui(  # Made async again
+async def download_web_ui(
     spotdlc: Spotdl = Depends(get_spotdl),
     url: str = Form(...),
 ):
@@ -163,10 +146,24 @@ async def download_web_ui(  # Made async again
         songs = spotdlc.search([url])
         print(f"Found {len(songs)} songs: {[song.display_name for song in songs]}")
         
-        # Run download in a separate thread to avoid event loop conflicts
+        # Run download in a separate thread with timeout
         loop = asyncio.get_event_loop()
         with ThreadPoolExecutor() as executor:
-            results = await loop.run_in_executor(executor, download_songs_sync, spotdlc, songs)
+            try:
+                # Add 60 second timeout for the entire download process
+                results = await asyncio.wait_for(
+                    loop.run_in_executor(executor, download_songs_sync, spotdlc, songs),
+                    timeout=60.0
+                )
+            except asyncio.TimeoutError:
+                return f"""
+            <div>
+                <button type="submit" class="btn btn-lg btn-light fw-bold border-white button mx-auto" id="button-download" style="display: block;"><i class="fa-solid fa-down-long"></i></button>
+                <div class="alert alert-warning mx-auto" id="success-card" style="display: none;">
+                    <strong>Download timed out after 60 seconds</strong>
+                </div>
+            </div>
+            """
         
         print(f"Download results: {results}")
     except Exception as error:
@@ -196,7 +193,7 @@ async def download_web_ui(  # Made async again
     tags=['Downloader'],
     summary='Download a song or songs from a playlist',
 )
-async def download(  # Made async again
+async def download(
     url: str,
     spotdlc: Spotdl = Depends(get_spotdl),
 ):
@@ -211,13 +208,18 @@ async def download(  # Made async again
     """
     try:
         songs = spotdlc.search([url])
-        # Run download in a separate thread to avoid event loop conflicts
+        # Run download in a separate thread with timeout
         loop = asyncio.get_event_loop()
         with ThreadPoolExecutor() as executor:
-            await loop.run_in_executor(executor, download_songs_sync, spotdlc, songs)
+            await asyncio.wait_for(
+                loop.run_in_executor(executor, download_songs_sync, spotdlc, songs),
+                timeout=60.0
+            )
         return {'message': 'Download sucessful'}
+    except asyncio.TimeoutError:
+        return {'detail': 'Download timed out after 60 seconds'}
     except Exception as error:  # pragma: no cover
-        return {'detail': error}
+        return {'detail': str(error)}
 
 
 @app.get(
