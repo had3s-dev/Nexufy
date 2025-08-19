@@ -28,7 +28,7 @@ def cleanup_old_folders():
     logging.info("Running scheduled cleanup of old download folders...")
     now = datetime.now()
     cutoff = now - timedelta(hours=12)
-    
+
     try:
         for folder_name in os.listdir(DOWNLOAD_FOLDER):
             folder_path = os.path.join(DOWNLOAD_FOLDER, folder_name)
@@ -52,7 +52,7 @@ scheduler.start()
 @app.route('/', methods=['GET', 'POST'])
 def index():
     """
-    Handles the main page logic. 
+    Handles the main page logic.
     On POST, it processes the URL, downloads the audio, and provides a link.
     """
     if request.method == 'POST':
@@ -72,15 +72,15 @@ def index():
             # --- Setup Spotdl Client and Downloader ---
             client_id = os.environ.get('SPOTIFY_CLIENT_ID')
             client_secret = os.environ.get('SPOTIFY_CLIENT_SECRET')
-            
+
             if not client_id or not client_secret:
                 raise ValueError("Spotify API credentials are not configured.")
 
             # 1. The Spotdl class is now used only for searching.
             spotify_client = Spotdl(client_id=client_id, client_secret=client_secret)
-            
+
             songs = spotify_client.search([url])
-            
+
             if not songs:
                 flash('Could not find any songs for the given URL. Please check the link.', 'warning')
                 shutil.rmtree(session_folder)
@@ -88,7 +88,12 @@ def index():
 
             # 2. The Downloader class handles the actual download process.
             # Corrected: Proxy must be passed as a dictionary under the 'proxies' key within the settings.
-            downloader_settings = { "simple_tui": True }
+            # Corrected: Output format should be in downloader_settings
+            output_format = os.path.join(session_folder, "{title} - {artist}.{output-ext}")
+            downloader_settings = {
+                "simple_tui": True,
+                "output": output_format
+            }
             proxy_url_raw = os.environ.get('PROXY_URL')
             if proxy_url_raw:
                 logging.info(f"Setting proxy via settings dictionary: {proxy_url_raw}")
@@ -96,24 +101,24 @@ def index():
                     "http://": proxy_url_raw,
                     "https://": proxy_url_raw,
                 }
-            
+
             downloader = Downloader(settings=downloader_settings)
 
-            # 3. Iterate and download each song individually, passing the output path.
+            # 3. Iterate and download each song individually.
             downloaded_file = None
-            output_format = os.path.join(session_folder, "{title} - {artist}.{output-ext}")
 
             for song in songs:
-                _, path = downloader.download_song(song, output_format)
+                # Corrected: download_song takes only one argument
+                _, path = downloader.download_song(song)
                 if path:
                     downloaded_file = os.path.basename(path)
-                    break 
+                    break
 
             if downloaded_file:
                 logging.info(f"Successfully downloaded: {downloaded_file}")
-                return render_template('index.html', 
-                                       download_link=True, 
-                                       session_id=session_id, 
+                return render_template('index.html',
+                                       download_link=True,
+                                       session_id=session_id,
                                        filename=downloaded_file)
             else:
                 flash('Download failed. The URL might be invalid or protected.', 'danger')
