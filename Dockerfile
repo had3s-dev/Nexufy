@@ -1,50 +1,29 @@
-FROM python:3.13-slim
+# Use an official Python runtime as a parent image
+FROM python:3.10-slim
 
-LABEL maintainer="Henrique Sebastião <contato@henriquesebastiao.com>"
-LABEL version="0.3.2"
-LABEL description="Self-hosted Spotify downloader"
+# Set the working directory in the container
+WORKDIR /app
 
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-ENV PYTHON_COLORS=0
-ENV DOWNTIFY_PORT=8080
+# Copy the dependencies file to the working directory
+COPY requirements.txt .
 
-WORKDIR /downtify
+# Install any needed packages specified in requirements.txt
+# We use --no-cache-dir to reduce image size
+RUN pip install --no-cache-dir -r requirements.txt
 
-COPY main.py requirements-app.txt entrypoint.sh downloader.py ./
-COPY templates ./templates
-COPY assets ./assets
-COPY static ./static
+# Install ffmpeg which is required by spotdl
+RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
 
-# Install system dependencies including gosu
-RUN apt-get update && apt-get install -y \
-    ffmpeg \
-    curl \
-    ca-certificates \
-    wget \
-    gosu \
-    && rm -rf /var/lib/apt/lists/*
+# Copy the content of the local src directory to the working directory
+COPY . .
 
-# Step 1: Fix entrypoint script line endings and permissions
-RUN sed -i 's/\r$//g' entrypoint.sh && chmod +x entrypoint.sh
+# Make port 8000 available to the world outside this container
+EXPOSE 8080
 
-# Step 2: Install Python dependencies including yt-dlp
-RUN pip install --no-cache-dir --root-user-action ignore -r requirements-app.txt && \
-    pip install --no-cache-dir --upgrade spotdl yt-dlp
+# Define environment variable for the Flask app
+ENV FLASK_APP=main.py
 
-# Step 3: Create cache directories and symlink ffmpeg
-RUN mkdir -p /.spotdl /.cache && \
-    ln -s /usr/bin/ffmpeg /downtify/ffmpeg
-
-# Set environment variables for cache paths
-ENV XDG_CACHE_HOME=/.cache
-ENV SPOTDL_CACHE_PATH=/.spotdl
-
-ENV UID=1000
-ENV GID=1000
-ENV UMASK=022
-ENV DOWNLOAD_DIR=/downloads
-
-EXPOSE ${DOWNTIFY_PORT}
-
-ENTRYPOINT ["./entrypoint.sh"]
+# Run the application using Gunicorn
+# Gunicorn is a production-ready WSGI server
+# PROXY_URL and SECRET_KEY should be set in the deployment environment (e.g., Railway)
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "4", "main:app"]

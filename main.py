@@ -1,102 +1,145 @@
-# main.py
 import os
-import subprocess
-import json
-from fastapi import FastAPI, Form
-from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel, Field
-from starlette.requests import Request
-from dotenv import load_dotenv
+import uuid
+import shutil
+from datetime import datetime, timedelta
+from flask import Flask, render_template, request, send_from_directory, flash, redirect, url_for
+from spotdl import Spotdl
+from apscheduler.schedulers.background import BackgroundScheduler
+import logging
 
-load_dotenv()
+# --- Configuration ---
+# Set up basic logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-DESCRIPTION = "Download Spotify music with album art and metadata."
+# Initialize Flask App
+app = Flask(__name__)
+app.secret_key = os.environ.get('SECRET_KEY', 'a_secure_random_secret_key')
 
-class Message(BaseModel):
-    message: str = Field(examples=['Download successful'])
+# Configuration for file downloads
+DOWNLOAD_FOLDER = 'downloads'
+if not os.path.exists(DOWNLOAD_FOLDER):
+    os.makedirs(DOWNLOAD_FOLDER)
 
-app = FastAPI(title='Downtify', version='0.3.2', description=DESCRIPTION)
+# --- Spotdl Downloader Setup ---
+def get_spotdl_instance():
+    """Initializes and returns a Spotdl instance with proxy configuration."""
+    proxy_url = os.environ.get('PROXY_URL')
+    spotdl_args = {
+        "ffmpeg": "ffmpeg",
+        "output": "{title} - {artist}.{output-ext}",
+        "format": "mp3",
+        "log_level": "INFO",
+    }
+    if proxy_url:
+        spotdl_args["proxy"] = proxy_url
+        logging.info(f"Using proxy: {proxy_url}")
+    else:
+        logging.warning("No PROXY_URL environment variable found. Running without a proxy.")
+        
+    return Spotdl(**spotdl_args)
 
-app.mount('/static', StaticFiles(directory='static'), name='static')
-app.mount('/assets', StaticFiles(directory='assets'), name='assets')
-
-if not os.path.exists('/downloads'):
-    os.makedirs('/downloads')
-app.mount('/downloads', StaticFiles(directory='/downloads'), name='downloads')
-
-templates = Jinja2Templates(directory='templates')
-
-def get_downloaded_files() -> str:
-    download_path = '/downloads'
+# --- Background Cleanup Scheduler ---
+def cleanup_old_folders():
+    """Removes download folders older than 12 hours."""
+    logging.info("Running scheduled cleanup of old download folders...")
+    now = datetime.now()
+    cutoff = now - timedelta(hours=12)
+    
     try:
-        files = os.listdir(download_path)
-        file_links = [f'<li class="list-group-item"><a href="/downloads/{file}">{file}</a></li>' for file in files]
-        return ''.join(file_links) if file_links else '<li class="list-group-item">No files found.</li>'
+        for folder_name in os.listdir(DOWNLOAD_FOLDER):
+            folder_path = os.path.join(DOWNLOAD_FOLDER, folder_name)
+            if os.path.isdir(folder_path):
+                try:
+                    folder_creation_time = datetime.fromtimestamp(os.path.getctime(folder_path))
+                    if folder_creation_time < cutoff:
+                        shutil.rmtree(folder_path)
+                        logging.info(f"Deleted old folder: {folder_path}")
+                except Exception as e:
+                    logging.error(f"Error processing folder {folder_path}: {e}")
     except Exception as e:
-        return f'<li class="list-group-item text-danger">Error: {str(e)}</li>'
+        logging.error(f"An error occurred during cleanup: {e}")
 
-@app.get('/', response_class=HTMLResponse)
-def index(request: Request):
-    return templates.TemplateResponse('index.html', {'request': request})
+# Initialize and start the scheduler
+scheduler = BackgroundScheduler(daemon=True)
+scheduler.add_job(cleanup_old_folders, 'interval', hours=1)
+scheduler.start()
 
-@app.post('/download-web', response_class=HTMLResponse)
-def download_web_ui(url: str = Form(...)):
-    try:
-        result = subprocess.run(
-            ['python', 'downloader.py', url],
-            capture_output=True, text=True, timeout=180
-        )
-        if result.returncode != 0:
-            raise Exception(f"Downloader script failed: {result.stderr}")
-        
-        output = json.loads(result.stdout)
-        if output.get("status") == "error":
-            raise Exception(output.get("message", "Unknown downloader error"))
-            
-    except Exception as error:
-        print(f"Error during download process: {error}")
-        return f"""
-        <div>
-            <button type="submit" class="btn btn-lg btn-light fw-bold border-white button mx-auto" id="button-download" style="display: block;"><i class="fa-solid fa-down-long"></i></button>
-            <div class="alert alert-danger mx-auto" id="success-card" style="display: none;">
-                <strong>Error: {error}</strong>
-            </div>
-        </div>
-        """
-
-    return """
-    <div>
-        <button type="submit" class="btn btn-lg btn-light fw-bold border-white button mx-auto" id="button-download" style="display: block;"><i class="fa-solid fa-down-long"></i></button>
-        <div class="alert alert-success mx-auto success-card" id="success-card" style="display: none;">
-            <strong>Download completed!</strong>
-        </div>
-    </div>
+# --- Flask Routes ---
+@app.route('/', methods=['GET', 'POST'])
+def index():
     """
+    Handles the main page logic. 
+    On POST, it processes the URL, downloads the audio, and provides a link.
+    """
+    if request.method == 'POST':
+        url = request.form.get('url')
+        if not url:
+            flash('Please provide a Spotify or YouTube URL.', 'danger')
+            return redirect(url_for('index'))
 
-@app.post('/download/', response_class=JSONResponse)
-def download(url: str):
-    try:
-        result = subprocess.run(
-            ['python', 'downloader.py', url],
-            capture_output=True, text=True, timeout=180
-        )
-        if result.returncode != 0:
-            return JSONResponse(status_code=500, content={'detail': f"Script error: {result.stderr}"})
-        
-        output = json.loads(result.stdout)
-        if output.get("status") == "error":
-            return JSONResponse(status_code=400, content={'detail': output.get("message")})
+        # Create a unique session folder for the download
+        session_id = str(uuid.uuid4())
+        session_folder = os.path.join(DOWNLOAD_FOLDER, session_id)
+        os.makedirs(session_folder, exist_ok=True)
+
+        try:
+            logging.info(f"Processing URL: {url} in session {session_id}")
+            spotdl = get_spotdl_instance()
             
-        return {'message': 'Download successful'}
-    except Exception as error:
-        return JSONResponse(status_code=500, content={'detail': str(error)})
+            # Change output directory for this download
+            spotdl.args['output'] = os.path.join(session_folder, spotdl.args['output'])
+            
+            songs = spotdl.search([url])
+            
+            if not songs:
+                flash('Could not find any songs for the given URL. Please check the link.', 'warning')
+                shutil.rmtree(session_folder)
+                return redirect(url_for('index'))
 
-@app.get('/list', response_class=HTMLResponse)
-def list_downloads_page(request: Request):
-    return templates.TemplateResponse('list.html', {'request': request, 'files': get_downloaded_files()})
+            # Download the songs
+            results = spotdl.download_songs(songs)
+            
+            # Find the first successfully downloaded song
+            downloaded_file = None
+            for song, path in results:
+                if path:
+                    downloaded_file = os.path.basename(path)
+                    break # We only handle the first file for simplicity
 
-@app.get('/list-items', response_class=HTMLResponse)
-def list_items_of_downloads_page():
-    return get_downloaded_files()
+            if downloaded_file:
+                logging.info(f"Successfully downloaded: {downloaded_file}")
+                return render_template('index.html', 
+                                       download_link=True, 
+                                       session_id=session_id, 
+                                       filename=downloaded_file)
+            else:
+                flash('Download failed. The URL might be invalid or protected.', 'danger')
+                shutil.rmtree(session_folder) # Clean up empty folder
+
+        except Exception as e:
+            logging.error(f"An error occurred during download for session {session_id}: {e}", exc_info=True)
+            flash(f'An unexpected error occurred: {e}', 'danger')
+            shutil.rmtree(session_folder) # Clean up on error
+
+        return redirect(url_for('index'))
+
+    return render_template('index.html')
+
+
+@app.route('/download/<session_id>/<filename>')
+def download_file(session_id, filename):
+    """Serves the downloaded file to the user."""
+    directory = os.path.join(DOWNLOAD_FOLDER, session_id)
+    logging.info(f"Serving file: {filename} from session: {session_id}")
+    return send_from_directory(directory, filename, as_attachment=True)
+
+
+@app.errorhandler(404)
+def page_not_found(e):
+    """Custom 404 error handler."""
+    return render_template('index.html', error="404: Page not found."), 404
+
+
+if __name__ == '__main__':
+    # Note: This is for local development. Use Gunicorn for production.
+    app.run(host='0.0.0.0', port=5000, debug=True)
