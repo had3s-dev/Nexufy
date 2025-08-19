@@ -11,7 +11,7 @@ ENV DOWNTIFY_PORT=8080
 
 WORKDIR /downtify
 
-COPY main.py requirements-app.txt entrypoint.sh ./
+COPY main.py requirements-app.txt entrypoint.sh downloader.py ./
 COPY templates ./templates
 COPY assets ./assets
 COPY static ./static
