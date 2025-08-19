@@ -32,7 +32,7 @@ for folder in [DOWNLOAD_FOLDER, CONVERTER_UPLOADS, CONVERTER_OUTPUT]:
 def sanitize_name(name):
     if not name:
         return "guest"
-    return re.sub(r'[^a_zA-Z0-9_-]', '', name).strip()[:50] or "guest"
+    return re.sub(r'[^a-zA-Z0-9_-]', '', name).strip()[:50] or "guest"
 
 # --- Background Cleanup Scheduler ---
 def cleanup_old_files():
@@ -117,7 +117,6 @@ def index():
                 logging.warning("PROXY_URL not set. Proceeding without proxy.")
             
             # Initialize the downloader with these settings.
-            # DO NOT pass the spotdl_instance here.
             downloader = Downloader(settings=downloader_settings)
             # --- END OF PROXY FIX ---
             
