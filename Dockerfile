@@ -25,6 +25,7 @@ EXPOSE 8080
 # Define environment variable for the Flask app
 ENV FLASK_APP=main.py
 
-# Run the application using Gunicorn with the --preload flag
-# --preload loads the app before forking workers, preventing initialization race conditions.
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "4", "--preload", "main:app"]
+# Run the application using Gunicorn with an increased timeout
+# The --timeout 300 flag allows each worker up to 300 seconds to complete a request.
+# This is the key change to prevent crashes on long downloads.
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "4", "--timeout", "300", "--preload", "main:app"]

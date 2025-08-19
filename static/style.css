@@ -5,16 +5,24 @@
     --primary-color: #6a11cb;
     --secondary-color: #2575fc;
     --background-color: #121212;
-    --surface-color: #1e1e1e;
+    --surface-color: rgba(30, 30, 30, 0.85); /* Made slightly more transparent */
     --text-color: #e0e0e0;
     --accent-color: #ff6b6b;
     --success-color: #50c878;
 }
 
+/* Animated Gradient Background */
+@keyframes gradientAnimation {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+}
+
 body {
     font-family: 'Quicksand', sans-serif;
-    background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
-    background-attachment: fixed;
+    background: linear-gradient(270deg, #6a11cb, #2575fc, #ff6b6b, #f89b29);
+    background-size: 800% 800%;
+    animation: gradientAnimation 25s ease infinite;
     color: var(--text-color);
     min-height: 100vh;
     display: flex;
@@ -31,16 +39,19 @@ body {
     font-family: 'Pacifico', cursive;
     font-size: 1.8rem;
     color: var(--text-color) !important;
+    /* Glowing text effect */
+    text-shadow: 0 0 4px rgba(255, 255, 255, 0.7), 0 0 8px var(--accent-color);
 }
 
 .nav-link {
     font-weight: 500;
     color: rgba(224, 224, 224, 0.8) !important;
-    transition: color 0.3s ease;
+    transition: color 0.3s ease, text-shadow 0.3s ease;
 }
 
 .nav-link:hover, .nav-link.active {
     color: white !important;
+    text-shadow: 0 0 5px var(--accent-color);
 }
 
 .main-container {
@@ -49,15 +60,37 @@ body {
 
 .card {
     background-color: var(--surface-color);
-    border: none;
+    border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 1.5rem;
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
     overflow: hidden;
-    transition: transform 0.3s ease;
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+    position: relative; /* Needed for the pseudo-element */
+    backdrop-filter: blur(5px);
+}
+
+/* Stardust/Noise overlay for a retro feel */
+.card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-image: url('https://www.transparenttextures.com/patterns/stardust.png');
+    opacity: 0.04;
+    pointer-events: none;
+    z-index: 0;
+}
+
+.card-body {
+    position: relative;
+    z-index: 1;
 }
 
 .card:hover {
-    transform: translateY(-5px);
+    transform: translateY(-5px) scale(1.01);
+    box-shadow: 0 15px 40px rgba(0, 0, 0, 0.5);
 }
 
 .card-title {
@@ -113,7 +146,8 @@ body {
 
 footer {
     padding: 2rem 0;
-    color: rgba(255, 255, 255, 0.7);
+    color: rgba(255, 255, 255, 0.8);
+    text-shadow: 0 1px 3px rgba(0,0,0,0.5);
 }
 
 footer a {
@@ -130,6 +164,11 @@ footer a:hover {
     background-color: var(--surface-color);
     border: 1px solid #333;
     color: var(--text-color);
+    transition: background-color 0.2s ease;
+}
+
+.download-list-group .list-group-item:hover {
+    background-color: rgba(255, 107, 107, 0.1);
 }
 
 .download-list-group .list-group-item strong {
