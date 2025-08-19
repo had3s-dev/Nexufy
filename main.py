@@ -384,6 +384,7 @@ def process_download():
             return redirect(url_for('index'))
 
         is_playlist = len(songs) > 1
+        download_path = None # Initialize download_path
         if is_playlist:
             playlist_name = songs[0].album or songs[0].artist or "Playlist"
             sanitized_playlist_name = "".join(c for c in playlist_name if c.isalnum() or c in (' ', '-')).rstrip()
@@ -394,7 +395,6 @@ def process_download():
             output_format = os.path.join(session_folder, "{title} - {artist}.{output-ext}")
 
         # --- DOWNLOAD LOGIC WITH PROXY FALLBACK ---
-        downloaded_files_count = 0
         proxy_url = os.environ.get('PROXY_URL')
         best_cookies = get_best_cookies()
 
@@ -437,26 +437,27 @@ def process_download():
                 downloader_settings["yt_dlp_args"] = " ".join(yt_dlp_args)
                 downloader = Downloader(settings=downloader_settings)
                 success, _ = downloader.download_song(song)
-
-            if success:
-                downloaded_files_count += 1
         
         # --- END OF DOWNLOAD LOGIC ---
 
-        if downloaded_files_count > 0:
+        # Robust check: verify that files were actually created on disk.
+        actual_output_dir = download_path if is_playlist else session_folder
+        if os.path.exists(actual_output_dir) and os.listdir(actual_output_dir):
             if is_playlist:
                 zip_filename_base = f"{sanitized_playlist_name}"
                 zip_filepath = shutil.make_archive(os.path.join(session_folder, zip_filename_base), 'zip', download_path)
                 final_filename = os.path.basename(zip_filepath)
                 shutil.rmtree(download_path)
             else:
+                # Now this is safe because we've confirmed the directory is not empty.
                 final_filename = os.listdir(session_folder)[0]
             
             logging.info(f"Successfully prepared '{final_filename}' for user '{user_name}'")
             return render_template('index.html', download_link=True, user_name=user_name, session_id=session_id, filename=final_filename)
         else:
-            flash('ERROR: Download failed after multiple attempts. The URL might be invalid or protected. Try uploading fresh cookies.', 'danger')
-            shutil.rmtree(session_folder)
+            flash('ERROR: Download failed. No audio file was created. The URL might be invalid or protected. Try uploading fresh cookies.', 'danger')
+            if os.path.exists(session_folder):
+                shutil.rmtree(session_folder)
 
     except Exception as e:
         logging.error(f"An error occurred for user '{user_name}': {e}", exc_info=True)
