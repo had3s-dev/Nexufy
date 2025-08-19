@@ -48,24 +48,29 @@ if not os.path.exists('/downloads'):
 app.mount('/downloads', StaticFiles(directory='/downloads'), name='downloads')
 templates = Jinja2Templates(directory='templates')
 
-DOWNLOADER_OPTIONS: DownloaderOptions = {
-    'output': os.getenv(
-        'OUTPUT_PATH', default='/downloads/{artists} - {title}.{output-ext}'
-    ),
-    'ffmpeg': '/usr/bin/ffmpeg',
-    'audio_providers': ['youtube-music', 'youtube'],
-    'lyrics_providers': ['genius', 'azlyrics'],
-    'generate_lrc': False,
-    'overwrite': 'skip',
-    'restrict_filenames': False,
-    'print_errors': True,
-    # This line tells your app to use the proxy
-    'proxy': os.getenv('PROXY_URL', None)
-}
-
-
 @lru_cache(maxsize=1)
 def get_spotdl():
+    """
+    Initializes and returns a Spotdl instance.
+    Using lru_cache to reuse the same instance across requests.
+    """
+    proxy_url = os.getenv('PROXY_URL', None)
+    print(f"Initializing Spotdl with proxy: {proxy_url}")
+
+    downloader_options: DownloaderOptions = {
+        'output': os.getenv(
+            'OUTPUT_PATH', default='/downloads/{artists} - {title}.{output-ext}'
+        ),
+        'ffmpeg': '/usr/bin/ffmpeg',
+        'audio_providers': ['youtube-music', 'youtube'],
+        'lyrics_providers': ['genius', 'azlyrics'],
+        'generate_lrc': False,
+        'overwrite': 'skip',
+        'restrict_filenames': False,
+        'print_errors': True,
+        'proxy': proxy_url
+    }
+
     return Spotdl(
         client_id=os.getenv(
             'CLIENT_ID', default='5f573c9620494bae87890c0f08a60293'
@@ -73,9 +78,8 @@ def get_spotdl():
         client_secret=os.getenv(
             'CLIENT_SECRET', default='212476d9b0f3472eaa762d90b19b0ba8'
         ),
-        downloader_settings=DOWNLOADER_OPTIONS,
+        downloader_settings=downloader_options,
     )
-
 
 def get_downloaded_files() -> str:
     download_path = '/downloads'
