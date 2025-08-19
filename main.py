@@ -15,18 +15,55 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'a_secure_random_secret_key')
 
-# --- Tell pydub where to find ffmpeg and ffprobe ---
-AudioSegment.converter = "/usr/bin/ffmpeg"
-AudioSegment.ffprobe = "/usr/bin/ffprobe"
+# --- Railway-specific ffmpeg configuration ---
+# Railway may have ffmpeg in different locations, so we try multiple paths
+def find_ffmpeg():
+    possible_paths = [
+        "/usr/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg", 
+        "/opt/homebrew/bin/ffmpeg",
+        "ffmpeg"  # System PATH
+    ]
+    
+    for path in possible_paths:
+        if shutil.which(path):
+            logging.info(f"Found ffmpeg at: {path}")
+            return path
+    
+    logging.warning("ffmpeg not found, pydub may not work properly")
+    return "ffmpeg"  # Fallback to system PATH
 
-# --- Folder Setup ---
-DOWNLOAD_FOLDER = 'downloads'
-CONVERTER_UPLOADS = 'converter_uploads'
-CONVERTER_OUTPUT = 'converter_output'
+def find_ffprobe():
+    possible_paths = [
+        "/usr/bin/ffprobe",
+        "/usr/local/bin/ffprobe",
+        "/opt/homebrew/bin/ffprobe", 
+        "ffprobe"  # System PATH
+    ]
+    
+    for path in possible_paths:
+        if shutil.which(path):
+            logging.info(f"Found ffprobe at: {path}")
+            return path
+    
+    logging.warning("ffprobe not found, pydub may not work properly")
+    return "ffprobe"  # Fallback to system PATH
+
+# Set ffmpeg paths dynamically for Railway
+AudioSegment.converter = find_ffmpeg()
+AudioSegment.ffprobe = find_ffprobe()
+
+# --- Railway-optimized folder setup with temp directory ---
+# Use Railway's /tmp directory for ephemeral storage
+TEMP_BASE = os.environ.get('RAILWAY_VOLUME_MOUNT_PATH', '/tmp')
+DOWNLOAD_FOLDER = os.path.join(TEMP_BASE, 'downloads')
+CONVERTER_UPLOADS = os.path.join(TEMP_BASE, 'converter_uploads') 
+CONVERTER_OUTPUT = os.path.join(TEMP_BASE, 'converter_output')
 
 for folder in [DOWNLOAD_FOLDER, CONVERTER_UPLOADS, CONVERTER_OUTPUT]:
     if not os.path.exists(folder):
-        os.makedirs(folder)
+        os.makedirs(folder, exist_ok=True)
+        logging.info(f"Created directory: {folder}")
 
 # --- Helper Functions ---
 def sanitize_name(name):
@@ -34,29 +71,66 @@ def sanitize_name(name):
         return "guest"
     return re.sub(r'[^a-zA-Z0-9_-]', '', name).strip()[:50] or "guest"
 
-# --- Background Cleanup Scheduler ---
+def check_youtube_setup():
+    """Check if YouTube cookies are configured for better reliability"""
+    cookies_path = os.environ.get('YOUTUBE_COOKIES_FILE')
+    
+    # For Railway, cookies might be stored as an environment variable
+    cookies_content = os.environ.get('YOUTUBE_COOKIES_CONTENT')
+    
+    if cookies_content:
+        # Create cookies file from environment variable content
+        cookies_path = os.path.join(TEMP_BASE, 'youtube_cookies.txt')
+        try:
+            with open(cookies_path, 'w') as f:
+                f.write(cookies_content)
+            os.environ['YOUTUBE_COOKIES_FILE'] = cookies_path
+            logging.info("YouTube cookies created from environment variable")
+            return
+        except Exception as e:
+            logging.error(f"Failed to create cookies file from environment: {e}")
+    
+    if not cookies_path:
+        logging.warning("YOUTUBE_COOKIES_FILE not set - downloads may fail due to YouTube restrictions")
+        logging.warning("Consider setting YOUTUBE_COOKIES_CONTENT environment variable with cookies content")
+    elif not os.path.exists(cookies_path):
+        logging.warning(f"YouTube cookies file not found at: {cookies_path}")
+    else:
+        logging.info("YouTube cookies file found - better download reliability expected")
+
+# --- Railway-optimized cleanup scheduler ---
 def cleanup_old_files():
     logging.info("Running scheduled cleanup of old files and folders...")
     now = datetime.now()
-    cutoff = now - timedelta(hours=12)
+    cutoff = now - timedelta(hours=2)  # More aggressive cleanup for Railway's limited storage
     
     for base_folder in [DOWNLOAD_FOLDER, CONVERTER_UPLOADS, CONVERTER_OUTPUT]:
         try:
+            if not os.path.exists(base_folder):
+                continue
+                
             for item_name in os.listdir(base_folder):
                 item_path = os.path.join(base_folder, item_name)
-                if datetime.fromtimestamp(os.path.getctime(item_path)) < cutoff:
-                    if os.path.isdir(item_path):
-                        shutil.rmtree(item_path)
-                        logging.info(f"Deleted old folder: {item_path}")
-                    else:
-                        os.remove(item_path)
-                        logging.info(f"Deleted old file: {item_path}")
+                try:
+                    if datetime.fromtimestamp(os.path.getctime(item_path)) < cutoff:
+                        if os.path.isdir(item_path):
+                            shutil.rmtree(item_path)
+                            logging.info(f"Deleted old folder: {item_path}")
+                        else:
+                            os.remove(item_path)
+                            logging.info(f"Deleted old file: {item_path}")
+                except (OSError, FileNotFoundError) as e:
+                    logging.warning(f"Could not delete {item_path}: {e}")
         except Exception as e:
             logging.error(f"Error during cleanup of {base_folder}: {e}")
 
+# More frequent cleanup for Railway
 scheduler = BackgroundScheduler(daemon=True)
-scheduler.add_job(cleanup_old_files, 'interval', hours=1)
+scheduler.add_job(cleanup_old_files, 'interval', minutes=30)  # Every 30 minutes
 scheduler.start()
+
+# Check YouTube setup on startup
+check_youtube_setup()
 
 # --- Flask Routes ---
 @app.route('/', methods=['GET', 'POST'])
@@ -106,19 +180,48 @@ def index():
             else:
                 output_format = os.path.join(session_folder, "{title} - {artist}.{output-ext}")
 
-            # --- CORRECT AND FINAL PROXY IMPLEMENTATION ---
-            # The proxy settings are passed ONLY to the Downloader via yt_dlp_args.
+            # --- ENHANCED PROXY + YOUTUBE FIX FOR SPOTDL 4.4.0 ---
             downloader_settings = {"simple_tui": True, "output": output_format}
+            
+            # Build yt-dlp args list
+            yt_dlp_args = []
+            
+            # Add proxy settings if available
             proxy_url = os.environ.get('PROXY_URL')
             if proxy_url:
-                logging.info(f"Attempting to use proxy: {proxy_url}")
-                downloader_settings["yt_dlp_args"] = f"--proxy {proxy_url} --source-address 0.0.0.0"
+                logging.info(f"Using proxy: {proxy_url}")
+                yt_dlp_args.extend([
+                    "--proxy", proxy_url,
+                    "--source-address", "0.0.0.0"
+                ])
             else:
                 logging.warning("PROXY_URL not set. Proceeding without proxy.")
             
-            # Initialize the downloader with these settings.
+            # Add YouTube-specific fixes for recent restrictions
+            yt_dlp_args.extend([
+                "--socket-timeout", "30",
+                "--retries", "3",
+                "--fragment-retries", "3",
+                "--retry-sleep", "1",
+                "--no-abort-on-error",
+                "--ignore-errors",
+                "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            ])
+            
+            # Add cookies if available (highly recommended for YouTube)
+            cookies_path = os.environ.get('YOUTUBE_COOKIES_FILE')
+            if cookies_path and os.path.exists(cookies_path):
+                yt_dlp_args.extend(["--cookies", cookies_path])
+                logging.info("Using YouTube cookies for authentication")
+            
+            # Convert args list to string format for spotdl 4.4.0 compatibility
+            if yt_dlp_args:
+                downloader_settings["yt_dlp_args"] = " ".join(yt_dlp_args)
+                logging.info(f"yt-dlp args: {downloader_settings['yt_dlp_args']}")
+            
+            # Initialize the downloader with enhanced settings
             downloader = Downloader(settings=downloader_settings)
-            # --- END OF PROXY FIX ---
+            # --- END OF ENHANCED FIX ---
             
             downloaded_files_count = sum(1 for song in songs if downloader.download_song(song)[1])
 
@@ -235,4 +338,7 @@ def page_not_found(e):
     return render_template('404.html'), 404
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # Railway provides PORT environment variable
+    port = int(os.environ.get('PORT', 5000))
+    # Railway runs on 0.0.0.0 by default
+    app.run(host='0.0.0.0', port=port, debug=False)  # Disable debug in production
