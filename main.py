@@ -16,7 +16,6 @@ app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'a_secure_random_secret_key')
 
 # --- Tell pydub where to find ffmpeg ---
-# This is a critical fix for the converter on Railway
 AudioSegment.converter = "/usr/bin/ffmpeg"
 
 # --- Folder Setup ---
@@ -32,7 +31,7 @@ for folder in [DOWNLOAD_FOLDER, CONVERTER_UPLOADS, CONVERTER_OUTPUT]:
 def sanitize_name(name):
     if not name:
         return "guest"
-    return re.sub(r'[^a-zA-Z0-9_-]', '', name).strip()[:50] or "guest"
+    return re.sub(r'[^a_zA_Z0-9_-]', '', name).strip()[:50] or "guest"
 
 # --- Background Cleanup Scheduler ---
 def cleanup_old_files():
@@ -40,12 +39,10 @@ def cleanup_old_files():
     now = datetime.now()
     cutoff = now - timedelta(hours=12)
     
-    # Clean downloader session folders and converter files
     for base_folder in [DOWNLOAD_FOLDER, CONVERTER_UPLOADS, CONVERTER_OUTPUT]:
         try:
             for item_name in os.listdir(base_folder):
                 item_path = os.path.join(base_folder, item_name)
-                # Check creation time and delete if older than cutoff
                 if datetime.fromtimestamp(os.path.getctime(item_path)) < cutoff:
                     if os.path.isdir(item_path):
                         shutil.rmtree(item_path)
@@ -84,24 +81,12 @@ def index():
             if not client_id or not client_secret:
                 raise ValueError("Spotify API credentials are not configured.")
 
-            # --- ROBUST PROXY IMPLEMENTATION ---
-            # Initialize spotdl_args dictionary
-            spotdl_args = {
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "headless": True # Important for server environments
-            }
-            proxy_url = os.environ.get('PROXY_URL')
-            if proxy_url:
-                logging.info(f"Attempting to use proxy: {proxy_url}")
-                # Pass proxy directly during initialization
-                spotdl_args["proxy"] = proxy_url
-            else:
-                logging.warning("PROXY_URL not set. Proceeding without proxy.")
-            
-            # Initialize Spotdl with the arguments
-            spotify_client = Spotdl(**spotdl_args)
-            # --- END OF PROXY FIX ---
+            # Initialize Spotdl for searching ONLY. No proxy here.
+            spotify_client = Spotdl(
+                client_id=client_id,
+                client_secret=client_secret,
+                headless=True
+            )
 
             songs = spotify_client.search([url])
 
@@ -120,9 +105,18 @@ def index():
             else:
                 output_format = os.path.join(session_folder, "{title} - {artist}.{output-ext}")
 
-            # Note: The proxy is already set in the client, so we don't need yt_dlp_args here
+            # --- CORRECTED PROXY IMPLEMENTATION ---
+            # The proxy settings are passed to the Downloader via yt_dlp_args
             downloader_settings = {"simple_tui": True, "output": output_format}
-            downloader = Downloader(settings=downloader_settings, spotdl_instance=spotify_client)
+            proxy_url = os.environ.get('PROXY_URL')
+            if proxy_url:
+                logging.info(f"Attempting to use proxy: {proxy_url}")
+                downloader_settings["yt_dlp_args"] = f"--proxy {proxy_url} --source-address 0.0.0.0"
+            else:
+                logging.warning("PROXY_URL not set. Proceeding without proxy.")
+            # --- END OF PROXY FIX ---
+
+            downloader = Downloader(settings=downloader_settings)
             
             downloaded_files_count = sum(1 for song in songs if downloader.download_song(song)[1])
 
@@ -171,7 +165,6 @@ def converter_page():
             return redirect(request.url)
 
         if file:
-            # Use a unique ID for filenames to prevent conflicts
             temp_id = str(uuid.uuid4())
             upload_path = os.path.join(CONVERTER_UPLOADS, temp_id)
             
@@ -191,7 +184,6 @@ def converter_page():
                 flash(f"ERROR: Conversion failed. The uploaded file may not be a valid audio format. Details: {e}", 'danger')
                 return redirect(request.url)
             finally:
-                # Clean up the temporary uploaded file
                 if os.path.exists(upload_path):
                     os.remove(upload_path)
 
