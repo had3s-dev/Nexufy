@@ -15,8 +15,9 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'a_secure_random_secret_key')
 
-# --- Tell pydub where to find ffmpeg ---
+# --- Tell pydub where to find ffmpeg and ffprobe ---
 AudioSegment.converter = "/usr/bin/ffmpeg"
+AudioSegment.ffprobe = "/usr/bin/ffprobe"
 
 # --- Folder Setup ---
 DOWNLOAD_FOLDER = 'downloads'
@@ -31,7 +32,7 @@ for folder in [DOWNLOAD_FOLDER, CONVERTER_UPLOADS, CONVERTER_OUTPUT]:
 def sanitize_name(name):
     if not name:
         return "guest"
-    return re.sub(r'[^a_zA_Z0-9_-]', '', name).strip()[:50] or "guest"
+    return re.sub(r'[^a_zA-Z0-9_-]', '', name).strip()[:50] or "guest"
 
 # --- Background Cleanup Scheduler ---
 def cleanup_old_files():
@@ -81,21 +82,12 @@ def index():
             if not client_id or not client_secret:
                 raise ValueError("Spotify API credentials are not configured.")
 
-            # --- CORRECTED PROXY IMPLEMENTATION ---
-            spotdl_args = {
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "headless": True
-            }
-            proxy_url = os.environ.get('PROXY_URL')
-            if proxy_url:
-                logging.info(f"Attempting to use proxy: {proxy_url}")
-                spotdl_args["proxy"] = proxy_url
-            else:
-                logging.warning("PROXY_URL not set. Proceeding without proxy.")
-
-            spotify_client = Spotdl(**spotdl_args)
-            # --- END OF PROXY FIX ---
+            # Initialize Spotdl for searching ONLY. It does not need proxy info.
+            spotify_client = Spotdl(
+                client_id=client_id,
+                client_secret=client_secret,
+                headless=True
+            )
 
             songs = spotify_client.search([url])
 
@@ -114,10 +106,20 @@ def index():
             else:
                 output_format = os.path.join(session_folder, "{title} - {artist}.{output-ext}")
 
+            # --- CORRECT AND FINAL PROXY IMPLEMENTATION ---
+            # The proxy settings are passed ONLY to the Downloader via yt_dlp_args.
             downloader_settings = {"simple_tui": True, "output": output_format}
+            proxy_url = os.environ.get('PROXY_URL')
+            if proxy_url:
+                logging.info(f"Attempting to use proxy: {proxy_url}")
+                downloader_settings["yt_dlp_args"] = f"--proxy {proxy_url} --source-address 0.0.0.0"
+            else:
+                logging.warning("PROXY_URL not set. Proceeding without proxy.")
             
-            # The downloader MUST be initialized with the spotdl_instance to inherit the proxy
-            downloader = Downloader(settings=downloader_settings, spotdl_instance=spotify_client)
+            # Initialize the downloader with these settings.
+            # DO NOT pass the spotdl_instance here.
+            downloader = Downloader(settings=downloader_settings)
+            # --- END OF PROXY FIX ---
             
             downloaded_files_count = sum(1 for song in songs if downloader.download_song(song)[1])
 
