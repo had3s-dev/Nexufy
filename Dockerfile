@@ -9,7 +9,9 @@ COPY requirements.txt .
 
 # Install any needed packages specified in requirements.txt
 # We use --no-cache-dir to reduce image size
-RUN pip install --no-cache-dir -r requirements.txt
+# And we upgrade spotdl and yt-dlp to the latest versions
+RUN pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir --upgrade spotdl yt-dlp
 
 # Install ffmpeg which is required by spotdl
 RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
