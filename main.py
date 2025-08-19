@@ -1,7 +1,7 @@
 import os
-from functools import lru_cache
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Form
@@ -48,9 +48,10 @@ if not os.path.exists('/downloads'):
 app.mount('/downloads', StaticFiles(directory='/downloads'), name='downloads')
 templates = Jinja2Templates(directory='templates')
 
-def get_spotdl():
+
+def get_spotdl_instance():
     """
-    Initializes and returns a new Spotdl instance for each request.
+    Creates and returns a new Spotdl instance.
     """
     proxy_url = os.getenv('PROXY_URL', None)
     print(f"Creating Spotdl instance with proxy: {proxy_url}")
@@ -78,6 +79,27 @@ def get_spotdl():
         ),
         downloader_settings=downloader_options,
     )
+
+
+def download_songs_sync(spotdlc, songs):
+    """Synchronous download function"""
+    results = []
+    for song in songs:
+        try:
+            print(f"Attempting to download: {song.display_name}")
+            song_object, download_path = spotdlc.downloader.search_and_download(song)
+            if download_path:
+                results.append(f"✅ Downloaded: {song.display_name}")
+            else:
+                results.append(f"❌ Failed to download {song.display_name}: No download path returned.")
+        except Exception as e:
+            error_msg = f"❌ Failed to download {song.display_name}: {e}"
+            results.append(error_msg)
+            print(f"Detailed download error for {song.display_name}:")
+            import traceback
+            traceback.print_exc()
+    return results
+
 
 def get_downloaded_files() -> str:
     download_path = '/downloads'
@@ -108,48 +130,23 @@ def index(request: Request):
     return templates.TemplateResponse('index.html', {'request': request})
 
 
-def download_songs_sync(spotdlc, songs):
-    """Synchronous download function to run in thread pool"""
-    results = []
-    for song in songs:
-        try:
-            print(f"Attempting to download: {song.display_name}")
-            # The result is a tuple (song, path), we don't need the path here
-            song_object, download_path = spotdlc.downloader.search_and_download(song)
-            if download_path:
-                 results.append(f"✅ Downloaded: {song.display_name}")
-            else:
-                results.append(f"❌ Failed to download {song.display_name}: No download path returned.")
-        except Exception as e:
-            # Log the specific error and continue with next song
-            error_msg = f"❌ Failed to download {song.display_name}: {e}"
-            results.append(error_msg)
-            print(f"Detailed download error for {song.display_name}:")
-            import traceback
-            traceback.print_exc()
-    return results
-
-
 @app.post(
     '/download-web',
     response_class=HTMLResponse,
     tags=['Downloader'],
     summary='Download one or more songs from a playlist via the WEB interface',
 )
-def download_web_ui(
-    spotdlc: Spotdl = Depends(get_spotdl),
-    url: str = Form(...),
-):
+def download_web_ui(url: str = Form(...)):
     """
     You can download a single song or all the songs in a playlist, album, etc.
     - **url**: URL of the song or playlist to download.
     """
+    spotdlc = get_spotdl_instance()
     try:
         print(f"Searching for: {url}")
         songs = spotdlc.search([url])
         print(f"Found {len(songs)} songs: {[song.display_name for song in songs]}")
 
-        # Directly call the synchronous download function
         results = download_songs_sync(spotdlc, songs)
         print(f"Download results: {results}")
 
@@ -182,14 +179,12 @@ def download_web_ui(
     tags=['Downloader'],
     summary='Download a song or songs from a playlist',
 )
-def download(
-    url: str,
-    spotdlc: Spotdl = Depends(get_spotdl),
-):
+def download(url: str):
     """
     You can download a single song or all the songs in a playlist, album, etc.
     - **url**: URL of the song or playlist to download.
     """
+    spotdlc = get_spotdl_instance()
     try:
         songs = spotdlc.search([url])
         download_songs_sync(spotdlc, songs)
