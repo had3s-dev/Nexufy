@@ -136,7 +136,7 @@ def download_file(session_id, filename):
     return send_from_directory(directory, filename, as_attachment=True)
 
 
-@app.errorhandler(44)
+@app.errorhandler(404)
 def page_not_found(e):
     """Custom 404 error handler."""
     return render_template('index.html', error="404: Page not found."), 404
