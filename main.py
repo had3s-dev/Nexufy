@@ -25,22 +25,23 @@ def get_spotdl_instance():
     """Initializes and returns a Spotdl instance with proxy configuration."""
     proxy_url = os.environ.get('PROXY_URL')
     
-    # Initialize Spotdl with only the arguments supported by the constructor.
-    init_args = {}
-    if proxy_url:
-        init_args["proxy"] = proxy_url
-        logging.info(f"Using proxy: {proxy_url}")
-    else:
-        logging.warning("No PROXY_URL environment variable found. Running without a proxy.")
-        
-    spotdl = Spotdl(**init_args)
+    # Initialize Spotdl with no arguments, as the constructor is strict.
+    spotdl = Spotdl()
 
-    # Configure other settings on the instance's `args` property after initialization.
-    spotdl.args.update({
+    # Configure all settings on the instance's `args` property after initialization.
+    config = {
         "output": "{title} - {artist}.{output-ext}",
         "format": "mp3",
         "log_level": "INFO",
-    })
+    }
+
+    if proxy_url:
+        config["proxy"] = proxy_url
+        logging.info(f"Using proxy: {proxy_url}")
+    else:
+        logging.warning("No PROXY_URL environment variable found. Running without a proxy.")
+    
+    spotdl.args.update(config)
         
     return spotdl
 
