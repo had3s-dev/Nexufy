@@ -48,14 +48,12 @@ if not os.path.exists('/downloads'):
 app.mount('/downloads', StaticFiles(directory='/downloads'), name='downloads')
 templates = Jinja2Templates(directory='templates')
 
-@lru_cache(maxsize=1)
 def get_spotdl():
     """
-    Initializes and returns a Spotdl instance.
-    Using lru_cache to reuse the same instance across requests.
+    Initializes and returns a new Spotdl instance for each request.
     """
     proxy_url = os.getenv('PROXY_URL', None)
-    print(f"Initializing Spotdl with proxy: {proxy_url}")
+    print(f"Creating Spotdl instance with proxy: {proxy_url}")
 
     downloader_options: DownloaderOptions = {
         'output': os.getenv(
