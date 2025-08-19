@@ -87,8 +87,10 @@ def index():
                 return redirect(url_for('index'))
 
             # 2. The Downloader class handles the actual download process.
-            # Corrected: All unsupported arguments are removed from the constructor.
-            downloader_settings = {}
+            # Corrected: Added 'simple_tui' to disable the rich progress bar in a server environment.
+            downloader_settings = {
+                "simple_tui": True
+            }
             if proxy_url:
                 downloader_settings["proxy"] = proxy_url
                 logging.info(f"Using proxy: {proxy_url}")
