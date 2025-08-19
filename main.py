@@ -24,8 +24,9 @@ if not os.path.exists(DOWNLOAD_FOLDER):
 def get_spotdl_instance():
     """Initializes and returns a Spotdl instance with proxy configuration."""
     proxy_url = os.environ.get('PROXY_URL')
+    # Corrected: Removed the 'ffmpeg' argument as it's no longer supported in the constructor.
+    # spotdl automatically finds ffmpeg if it's in the system's PATH.
     spotdl_args = {
-        "ffmpeg": "ffmpeg",
         "output": "{title} - {artist}.{output-ext}",
         "format": "mp3",
         "log_level": "INFO",
