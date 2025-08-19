@@ -4,10 +4,9 @@ import shutil
 import glob
 from datetime import datetime, timedelta
 from flask import Flask, render_template, request, send_from_directory, flash, redirect, url_for
-from spotdl import Spotdl
+from spotdl import Spotdl, AudioProviderError
 from spotdl.download.downloader import Downloader
 from spotdl.types.song import Song
-from spotdl.errors import AudioProviderError
 from apscheduler.schedulers.background import BackgroundScheduler
 from pydub import AudioSegment
 import logging
