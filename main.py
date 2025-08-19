@@ -22,16 +22,16 @@ app.secret_key = os.environ.get('SECRET_KEY', 'a_secure_random_secret_key')
 def find_ffmpeg():
     possible_paths = [
         "/usr/bin/ffmpeg",
-        "/usr/local/bin/ffmpeg", 
+        "/usr/local/bin/ffmpeg",
         "/opt/homebrew/bin/ffmpeg",
         "ffmpeg"  # System PATH
     ]
-    
+
     for path in possible_paths:
         if shutil.which(path):
             logging.info(f"Found ffmpeg at: {path}")
             return path
-    
+
     logging.warning("ffmpeg not found, pydub may not work properly")
     return "ffmpeg"  # Fallback to system PATH
 
@@ -39,15 +39,15 @@ def find_ffprobe():
     possible_paths = [
         "/usr/bin/ffprobe",
         "/usr/local/bin/ffprobe",
-        "/opt/homebrew/bin/ffprobe", 
+        "/opt/homebrew/bin/ffprobe",
         "ffprobe"  # System PATH
     ]
-    
+
     for path in possible_paths:
         if shutil.which(path):
             logging.info(f"Found ffprobe at: {path}")
             return path
-    
+
     logging.warning("ffprobe not found, pydub may not work properly")
     return "ffprobe"  # Fallback to system PATH
 
@@ -58,7 +58,7 @@ AudioSegment.ffprobe = find_ffprobe()
 # --- Railway-optimized folder setup with temp directory ---
 TEMP_BASE = os.environ.get('RAILWAY_VOLUME_MOUNT_PATH', '/tmp')
 DOWNLOAD_FOLDER = os.path.join(TEMP_BASE, 'downloads')
-CONVERTER_UPLOADS = os.path.join(TEMP_BASE, 'converter_uploads') 
+CONVERTER_UPLOADS = os.path.join(TEMP_BASE, 'converter_uploads')
 CONVERTER_OUTPUT = os.path.join(TEMP_BASE, 'converter_output')
 COOKIES_FOLDER = os.path.join(TEMP_BASE, 'cookies')  # New folder for user cookies
 
@@ -76,19 +76,19 @@ def sanitize_name(name):
 def validate_cookies_file(content):
     """Validate that uploaded content is a proper cookies file"""
     lines = content.strip().split('\n')
-    
+
     # Check for Netscape header
     if not lines[0].startswith('# Netscape HTTP Cookie File'):
         return False, "Invalid format: Missing Netscape header"
-    
+
     # Check for YouTube/Google cookies
     has_youtube_cookies = False
     valid_lines = 0
-    
+
     for line in lines[1:]:  # Skip header
         if line.startswith('#') or not line.strip():
             continue
-            
+
         parts = line.split('\t')
         if len(parts) >= 7:
             domain = parts[0]
@@ -97,13 +97,13 @@ def validate_cookies_file(content):
             valid_lines += 1
         else:
             return False, f"Invalid line format: {line[:50]}..."
-    
+
     if not has_youtube_cookies:
         return False, "No YouTube/Google cookies found"
-    
+
     if valid_lines < 3:
         return False, "Too few valid cookies"
-    
+
     return True, f"Valid cookies file with {valid_lines} cookies"
 
 def test_cookies_validity(cookies_path):
@@ -111,17 +111,17 @@ def test_cookies_validity(cookies_path):
     try:
         import http.cookiejar
         import urllib.request
-        
+
         # Load cookies
         jar = http.cookiejar.MozillaCookieJar(cookies_path)
         jar.load(ignore_discard=True, ignore_expires=True)
-        
+
         # Test request to YouTube
         opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
         opener.addheaders = [('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')]
-        
+
         response = opener.open('https://www.youtube.com', timeout=10)
-        
+
         if response.getcode() == 200:
             content = response.read().decode('utf-8')
             # Check for logged-in indicators
@@ -129,16 +129,16 @@ def test_cookies_validity(cookies_path):
                 return True, "Cookies appear to be from logged-in session"
             else:
                 return True, "Cookies work but may not be logged in"
-        
+
         return False, f"HTTP {response.getcode()}"
-        
+
     except Exception as e:
         return False, str(e)
 
 def get_best_cookies():
     """Find the best working cookies from available options"""
     cookies_options = []
-    
+
     # Option 1: Environment variable cookies
     env_cookies = os.environ.get('YOUTUBE_COOKIES_CONTENT')
     if env_cookies:
@@ -146,7 +146,7 @@ def get_best_cookies():
         try:
             with open(env_path, 'w') as f:
                 f.write(env_cookies)
-            
+
             is_working, status = test_cookies_validity(env_path)
             cookies_options.append({
                 'path': env_path,
@@ -157,14 +157,14 @@ def get_best_cookies():
             })
         except Exception as e:
             logging.error(f"Failed to create env cookies file: {e}")
-    
+
     # Option 2: User uploaded cookies
     cookie_files = glob.glob(os.path.join(COOKIES_FOLDER, '*.txt'))
     for cookie_file in cookie_files:
         try:
             age_hours = (datetime.now() - datetime.fromtimestamp(os.path.getctime(cookie_file))).total_seconds() / 3600
             is_working, status = test_cookies_validity(cookie_file)
-            
+
             cookies_options.append({
                 'path': cookie_file,
                 'source': f'User Upload: {os.path.basename(cookie_file)}',
@@ -174,35 +174,35 @@ def get_best_cookies():
             })
         except Exception as e:
             logging.error(f"Error testing cookies {cookie_file}: {e}")
-    
+
     # Sort by working status first, then by age (newer first)
     cookies_options.sort(key=lambda x: (not x['working'], x['age']))
-    
+
     # Log all options
     logging.info(f"Found {len(cookies_options)} cookie options:")
     for i, option in enumerate(cookies_options):
         status_icon = "✅" if option['working'] else "❌"
         logging.info(f"  {i+1}. {status_icon} {option['source']} (Age: {option['age']:.1f}h) - {option['status']}")
-    
+
     # Return the best working option
     for option in cookies_options:
         if option['working']:
             logging.info(f"Using cookies from: {option['source']}")
             return option['path']
-    
+
     # If no working cookies, return the newest one and log warning
     if cookies_options:
         newest = cookies_options[0]
         logging.warning(f"No working cookies found, using newest: {newest['source']}")
         return newest['path']
-    
+
     logging.warning("No cookies available")
     return None
 
 def setup_youtube_cookies():
     """Setup YouTube cookies using the best available option"""
     best_cookies = get_best_cookies()
-    
+
     if best_cookies:
         os.environ['YOUTUBE_COOKIES_FILE'] = best_cookies
         return True
@@ -214,12 +214,12 @@ def cleanup_old_files():
     logging.info("Running scheduled cleanup of old files and folders...")
     now = datetime.now()
     cutoff = now - timedelta(hours=2)  # More aggressive cleanup for Railway's limited storage
-    
+
     for base_folder in [DOWNLOAD_FOLDER, CONVERTER_UPLOADS, CONVERTER_OUTPUT]:
         try:
             if not os.path.exists(base_folder):
                 continue
-                
+
             for item_name in os.listdir(base_folder):
                 item_path = os.path.join(base_folder, item_name)
                 try:
@@ -234,7 +234,7 @@ def cleanup_old_files():
                     logging.warning(f"Could not delete {item_path}: {e}")
         except Exception as e:
             logging.error(f"Error during cleanup of {base_folder}: {e}")
-    
+
     # Clean old cookies (keep for 7 days)
     cookie_cutoff = now - timedelta(days=7)
     try:
@@ -262,13 +262,13 @@ def index():
 def cookies_page():
     """Cookie management page"""
     cookie_files = []
-    
+
     try:
         for cookie_file in glob.glob(os.path.join(COOKIES_FOLDER, '*.txt')):
             file_stat = os.stat(cookie_file)
             age = datetime.now() - datetime.fromtimestamp(file_stat.st_ctime)
             is_working, status = test_cookies_validity(cookie_file)
-            
+
             cookie_files.append({
                 'filename': os.path.basename(cookie_file),
                 'age': f"{age.days} days, {age.seconds//3600} hours",
@@ -279,10 +279,10 @@ def cookies_page():
             })
     except Exception as e:
         logging.error(f"Error reading cookie files: {e}")
-    
+
     # Sort by working status, then by age
     cookie_files.sort(key=lambda x: (not x['working'], x['age']))
-    
+
     return render_template('cookies.html', cookie_files=cookie_files)
 
 @app.route('/cookies/upload', methods=['POST'])
@@ -291,45 +291,45 @@ def upload_cookies():
     if 'cookies_file' not in request.files:
         flash('No file selected', 'danger')
         return redirect(url_for('cookies_page'))
-    
+
     file = request.files['cookies_file']
     user_name = sanitize_name(request.form.get('uploader_name', 'anonymous'))
-    
+
     if file.filename == '':
         flash('No file selected', 'danger')
         return redirect(url_for('cookies_page'))
-    
+
     try:
         # Read and validate file content
         content = file.read().decode('utf-8')
         is_valid, message = validate_cookies_file(content)
-        
+
         if not is_valid:
             flash(f'Invalid cookies file: {message}', 'danger')
             return redirect(url_for('cookies_page'))
-        
+
         # Save with timestamp and uploader name
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = f"{user_name}_{timestamp}_cookies.txt"
         file_path = os.path.join(COOKIES_FOLDER, filename)
-        
+
         with open(file_path, 'w') as f:
             f.write(content)
-        
+
         # Test the cookies
         is_working, status = test_cookies_validity(file_path)
         status_msg = "✅ Working" if is_working else f"⚠️ {status}"
-        
+
         flash(f'Cookies uploaded successfully! Status: {status_msg}', 'success' if is_working else 'warning')
         logging.info(f"New cookies uploaded by {user_name}: {filename} - {status}")
-        
+
         # Refresh best cookies
         setup_youtube_cookies()
-        
+
     except Exception as e:
         logging.error(f"Cookie upload failed: {e}")
         flash(f'Upload failed: {str(e)}', 'danger')
-    
+
     return redirect(url_for('cookies_page'))
 
 @app.route('/cookies/delete/<filename>')
@@ -341,7 +341,7 @@ def delete_cookies(filename):
             os.remove(file_path)
             flash(f'Deleted {filename}', 'success')
             logging.info(f"Deleted cookies file: {filename}")
-            
+
             # Refresh best cookies
             setup_youtube_cookies()
         else:
@@ -349,7 +349,7 @@ def delete_cookies(filename):
     except Exception as e:
         logging.error(f"Failed to delete {filename}: {e}")
         flash(f'Delete failed: {str(e)}', 'danger')
-    
+
     return redirect(url_for('cookies_page'))
 
 @app.route('/process', methods=['POST'])
@@ -401,10 +401,10 @@ def process_download():
 
         # --- ENHANCED PROXY + AUTOMATIC COOKIE SELECTION ---
         downloader_settings = {"simple_tui": True, "output": output_format}
-        
+
         # Build yt-dlp args list
         yt_dlp_args = []
-        
+
         # Add proxy settings if available
         proxy_url = os.environ.get('PROXY_URL')
         if proxy_url:
@@ -415,7 +415,7 @@ def process_download():
             ])
         else:
             logging.warning("PROXY_URL not set. Proceeding without proxy.")
-        
+
         # Add YouTube-specific fixes for recent restrictions
         yt_dlp_args.extend([
             "--socket-timeout", "30",
@@ -426,7 +426,7 @@ def process_download():
             "--ignore-errors",
             "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         ])
-        
+
         # Use best available cookies
         best_cookies = get_best_cookies()
         if best_cookies:
@@ -434,15 +434,15 @@ def process_download():
             logging.info(f"Using cookies from: {best_cookies}")
         else:
             logging.warning("No cookies available - downloads may fail")
-        
+
         # Convert args list to string format for spotdl 4.4.0 compatibility
         if yt_dlp_args:
             downloader_settings["yt_dlp_args"] = " ".join(yt_dlp_args)
             logging.info(f"yt-dlp args: {downloader_settings['yt_dlp_args']}")
-        
+
         # Initialize the downloader with enhanced settings
         downloader = Downloader(settings=downloader_settings)
-        
+
         downloaded_files_count = sum(1 for song in songs if downloader.download_song(song)[1])
 
         if downloaded_files_count > 0:
@@ -453,7 +453,7 @@ def process_download():
                 shutil.rmtree(download_path)
             else:
                 final_filename = os.listdir(session_folder)[0]
-            
+
             logging.info(f"Successfully prepared '{final_filename}' for user '{user_name}'")
             return render_template('index.html', download_link=True, user_name=user_name, session_id=session_id, filename=final_filename)
         else:
@@ -475,7 +475,7 @@ def converter_page():
         if 'file' not in request.files:
             flash('ERROR: No file part in request.', 'danger')
             return redirect(request.url)
-        
+
         file = request.files['file']
         if file.filename == '':
             flash('ERROR: No file selected.', 'danger')
@@ -491,12 +491,12 @@ def converter_page():
         if file:
             temp_id = str(uuid.uuid4())
             upload_path = os.path.join(CONVERTER_UPLOADS, temp_id)
-            
+
             try:
                 file.save(upload_path)
                 logging.info(f"Converting {file.filename} to {target_format}")
                 audio = AudioSegment.from_file(upload_path)
-                
+
                 output_filename = f"{os.path.splitext(file.filename)[0]}.{target_format}"
                 output_path = os.path.join(CONVERTER_OUTPUT, output_filename)
                 audio.export(output_path, format=target_format)

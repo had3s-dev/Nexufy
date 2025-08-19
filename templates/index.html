@@ -11,7 +11,7 @@
                     <br>Multi-signal sources (playlists/albums) will be compressed into a single data packet (.zip).
                 </p>
 
-                <form action="/" method="POST" id="downloadForm">
+                <form action="{{ url_for('process_download') }}" method="POST" id="downloadForm">
                     <div class="mb-3">
                         <input type="text" class="form-control form-control-lg text-center" name="name" placeholder="Enter Callsign (Optional)">
                     </div>
