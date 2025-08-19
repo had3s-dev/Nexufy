@@ -81,12 +81,21 @@ def index():
             if not client_id or not client_secret:
                 raise ValueError("Spotify API credentials are not configured.")
 
-            # Initialize Spotdl for searching ONLY. No proxy here.
-            spotify_client = Spotdl(
-                client_id=client_id,
-                client_secret=client_secret,
-                headless=True
-            )
+            # --- CORRECTED PROXY IMPLEMENTATION ---
+            spotdl_args = {
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "headless": True
+            }
+            proxy_url = os.environ.get('PROXY_URL')
+            if proxy_url:
+                logging.info(f"Attempting to use proxy: {proxy_url}")
+                spotdl_args["proxy"] = proxy_url
+            else:
+                logging.warning("PROXY_URL not set. Proceeding without proxy.")
+
+            spotify_client = Spotdl(**spotdl_args)
+            # --- END OF PROXY FIX ---
 
             songs = spotify_client.search([url])
 
@@ -105,18 +114,10 @@ def index():
             else:
                 output_format = os.path.join(session_folder, "{title} - {artist}.{output-ext}")
 
-            # --- CORRECTED PROXY IMPLEMENTATION ---
-            # The proxy settings are passed to the Downloader via yt_dlp_args
             downloader_settings = {"simple_tui": True, "output": output_format}
-            proxy_url = os.environ.get('PROXY_URL')
-            if proxy_url:
-                logging.info(f"Attempting to use proxy: {proxy_url}")
-                downloader_settings["yt_dlp_args"] = f"--proxy {proxy_url} --source-address 0.0.0.0"
-            else:
-                logging.warning("PROXY_URL not set. Proceeding without proxy.")
-            # --- END OF PROXY FIX ---
-
-            downloader = Downloader(settings=downloader_settings)
+            
+            # The downloader MUST be initialized with the spotdl_instance to inherit the proxy
+            downloader = Downloader(settings=downloader_settings, spotdl_instance=spotify_client)
             
             downloaded_files_count = sum(1 for song in songs if downloader.download_song(song)[1])
 
