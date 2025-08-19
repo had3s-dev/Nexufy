@@ -136,53 +136,34 @@ def download_songs_sync(spotdlc, songs):
     tags=['Downloader'],
     summary='Download one or more songs from a playlist via the WEB interface',
 )
-async def download_web_ui(
+def download_web_ui(
     spotdlc: Spotdl = Depends(get_spotdl),
     url: str = Form(...),
 ):
     """
     You can download a single song or all the songs in a playlist, album, etc.
-
     - **url**: URL of the song or playlist to download.
-
-    ### Responses
-
-    - `200` - Download successful.
     """
     try:
         print(f"Searching for: {url}")
         songs = spotdlc.search([url])
         print(f"Found {len(songs)} songs: {[song.display_name for song in songs]}")
-        
-        # Run download in a separate thread with timeout
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor() as executor:
-            try:
-                # Add 60 second timeout for the entire download process
-                results = await asyncio.wait_for(
-                    loop.run_in_executor(executor, download_songs_sync, spotdlc, songs),
-                    timeout=60.0
-                )
-            except asyncio.TimeoutError:
-                return f"""
-            <div>
-                <button type="submit" class="btn btn-lg btn-light fw-bold border-white button mx-auto" id="button-download" style="display: block;"><i class="fa-solid fa-down-long"></i></button>
-                <div class="alert alert-warning mx-auto" id="success-card" style="display: none;">
-                    <strong>Download timed out after 60 seconds</strong>
-                </div>
-            </div>
-            """
-        
+
+        # Directly call the synchronous download function
+        results = download_songs_sync(spotdlc, songs)
         print(f"Download results: {results}")
+
     except Exception as error:
+        import traceback
+        traceback.print_exc()
         return f"""
-    <div>
-        <button type="submit" class="btn btn-lg btn-light fw-bold border-white button mx-auto" id="button-download" style="display: block;"><i class="fa-solid fa-down-long"></i></button>
-        <div class="alert alert-danger mx-auto" id="success-card" style="display: none;">
-            <strong>Error: {error}</strong>
+        <div>
+            <button type="submit" class="btn btn-lg btn-light fw-bold border-white button mx-auto" id="button-download" style="display: block;"><i class="fa-solid fa-down-long"></i></button>
+            <div class="alert alert-danger mx-auto" id="success-card" style="display: none;">
+                <strong>Error: {error}</strong>
+            </div>
         </div>
-    </div>
-    """
+        """
 
     return """
     <div>
@@ -201,31 +182,18 @@ async def download_web_ui(
     tags=['Downloader'],
     summary='Download a song or songs from a playlist',
 )
-async def download(
+def download(
     url: str,
     spotdlc: Spotdl = Depends(get_spotdl),
 ):
     """
     You can download a single song or all the songs in a playlist, album, etc.
-
     - **url**: URL of the song or playlist to download.
-
-    ### Responses
-
-    - `200` - Download successful.
     """
     try:
         songs = spotdlc.search([url])
-        # Run download in a separate thread with a longer timeout
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor() as executor:
-            await asyncio.wait_for(
-                loop.run_in_executor(executor, download_songs_sync, spotdlc, songs),
-                timeout=120.0  # Increased timeout to 120 seconds
-            )
+        download_songs_sync(spotdlc, songs)
         return {'message': 'Download successful'}
-    except asyncio.TimeoutError:
-        return JSONResponse(status_code=408, content={'detail': 'Download timed out after 120 seconds'})
     except Exception as error:  # pragma: no cover
         import traceback
         traceback.print_exc()
