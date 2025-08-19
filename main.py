@@ -87,19 +87,21 @@ def index():
                 return redirect(url_for('index'))
 
             # 2. The Downloader class handles the actual download process.
+            # Initialize the downloader WITHOUT the proxy to bypass faulty validation.
             downloader_settings = { "simple_tui": True }
+            downloader = Downloader(settings=downloader_settings)
             
-            # Corrected: Pass the proxy as a dictionary to avoid parsing issues.
+            # Manually set the proxy on the underlying httpx client.
+            # This is a more robust method that avoids spotdl's validation.
             proxy_url_raw = os.environ.get('PROXY_URL')
             if proxy_url_raw:
-                logging.info(f"Using proxy: {proxy_url_raw}")
-                # The underlying library (httpx) supports a dictionary format for proxies.
-                downloader_settings["proxies"] = {
+                logging.info(f"Manually setting proxy on HTTP client: {proxy_url_raw}")
+                proxies = {
                     "http://": proxy_url_raw,
                     "https://": proxy_url_raw,
                 }
+                downloader.http_client.proxies = proxies
 
-            downloader = Downloader(settings=downloader_settings)
 
             # 3. Iterate and download each song individually, passing the output path.
             downloaded_file = None
