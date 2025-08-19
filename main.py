@@ -1,158 +1,62 @@
+# main.py
 import os
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
-from functools import lru_cache
-
-from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Form
+import subprocess
+import json
+from fastapi import FastAPI, Form
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
-from spotdl import Spotdl
-from spotdl.types.options import DownloaderOptions
 from starlette.requests import Request
+from dotenv import load_dotenv
 
 load_dotenv()
 
-DESCRIPTION = """
-Download Spotify music with album art and metadata.
-
-With Downtify you can download Spotify musics containing album art, track names, album title and other metadata about the songs.
-"""
-
+DESCRIPTION = "Download Spotify music with album art and metadata."
 
 class Message(BaseModel):
-    message: str = Field(examples=['Download sucessful'])
+    message: str = Field(examples=['Download successful'])
 
-
-app = FastAPI(
-    title='Downtify',
-    version='0.3.2',
-    description=DESCRIPTION,
-    contact={
-        'name': 'Downtify',
-        'url': 'https://github.com/henriquesebastiao/downtify',
-        'email': 'contato@henriquesebastiao.com',
-    },
-    terms_of_service='https://github.com/henriquesebastiao/downtify/',
-)
-
+app = FastAPI(title='Downtify', version='0.3.2', description=DESCRIPTION)
 
 app.mount('/static', StaticFiles(directory='static'), name='static')
 app.mount('/assets', StaticFiles(directory='assets'), name='assets')
 
 if not os.path.exists('/downloads'):
     os.makedirs('/downloads')
-
 app.mount('/downloads', StaticFiles(directory='/downloads'), name='downloads')
+
 templates = Jinja2Templates(directory='templates')
-
-
-def get_spotdl_instance():
-    """
-    Creates and returns a new Spotdl instance.
-    """
-    proxy_url = os.getenv('PROXY_URL', None)
-    print(f"Creating Spotdl instance with proxy: {proxy_url}")
-
-    downloader_options: DownloaderOptions = {
-        'output': os.getenv(
-            'OUTPUT_PATH', default='/downloads/{artists} - {title}.{output-ext}'
-        ),
-        'ffmpeg': '/usr/bin/ffmpeg',
-        'audio_providers': ['youtube-music', 'youtube'],
-        'lyrics_providers': ['genius', 'azlyrics'],
-        'generate_lrc': False,
-        'overwrite': 'skip',
-        'restrict_filenames': False,
-        'print_errors': True,
-        'proxy': proxy_url
-    }
-
-    return Spotdl(
-        client_id=os.getenv(
-            'CLIENT_ID', default='5f573c9620494bae87890c0f08a60293'
-        ),
-        client_secret=os.getenv(
-            'CLIENT_SECRET', default='212476d9b0f3472eaa762d90b19b0ba8'
-        ),
-        downloader_settings=downloader_options,
-    )
-
-
-def download_songs_sync(spotdlc, songs):
-    """Synchronous download function"""
-    results = []
-    for song in songs:
-        try:
-            print(f"Attempting to download: {song.display_name}")
-            song_object, download_path = spotdlc.downloader.search_and_download(song)
-            if download_path:
-                results.append(f"✅ Downloaded: {song.display_name}")
-            else:
-                results.append(f"❌ Failed to download {song.display_name}: No download path returned.")
-        except Exception as e:
-            error_msg = f"❌ Failed to download {song.display_name}: {e}"
-            results.append(error_msg)
-            print(f"Detailed download error for {song.display_name}:")
-            import traceback
-            traceback.print_exc()
-    return results
-
 
 def get_downloaded_files() -> str:
     download_path = '/downloads'
     try:
         files = os.listdir(download_path)
-        file_links = [
-            f'<li class="list-group-item"><a href="/downloads/{file}">{file}</a></li>'
-            for file in files
-        ]
-        files = (
-            ''.join(file_links)
-            if file_links
-            else '<li class="list-group-item">No files found.</li>'
-        )
+        file_links = [f'<li class="list-group-item"><a href="/downloads/{file}">{file}</a></li>' for file in files]
+        return ''.join(file_links) if file_links else '<li class="list-group-item">No files found.</li>'
     except Exception as e:
-        files = f'<li class="list-group-item text-danger">Error: {str(e)}</li>'
+        return f'<li class="list-group-item text-danger">Error: {str(e)}</li>'
 
-    return files
-
-
-@app.get(
-    '/',
-    response_class=HTMLResponse,
-    tags=['Web UI'],
-    summary='Application web interface',
-)
+@app.get('/', response_class=HTMLResponse)
 def index(request: Request):
     return templates.TemplateResponse('index.html', {'request': request})
 
-
-@app.post(
-    '/download-web',
-    response_class=HTMLResponse,
-    tags=['Downloader'],
-    summary='Download one or more songs from a playlist via the WEB interface',
-)
+@app.post('/download-web', response_class=HTMLResponse)
 def download_web_ui(url: str = Form(...)):
-    """
-    You can download a single song or all the songs in a playlist, album, etc.
-    - **url**: URL of the song or playlist to download.
-    """
-    spotdlc = get_spotdl_instance()
     try:
-        print(f"Searching for: {url}")
-        songs = spotdlc.search([url])
-        print(f"Found {len(songs)} songs: {[song.display_name for song in songs]}")
-
-        results = download_songs_sync(spotdlc, songs)
-        print(f"Download results: {results}")
-
+        result = subprocess.run(
+            ['python', 'downloader.py', url],
+            capture_output=True, text=True, timeout=180
+        )
+        if result.returncode != 0:
+            raise Exception(f"Downloader script failed: {result.stderr}")
+        
+        output = json.loads(result.stdout)
+        if output.get("status") == "error":
+            raise Exception(output.get("message", "Unknown downloader error"))
+            
     except Exception as error:
-        import traceback
-        traceback.print_exc()
+        print(f"Error during download process: {error}")
         return f"""
         <div>
             <button type="submit" class="btn btn-lg btn-light fw-bold border-white button mx-auto" id="button-download" style="display: block;"><i class="fa-solid fa-down-long"></i></button>
@@ -171,49 +75,28 @@ def download_web_ui(url: str = Form(...)):
     </div>
     """
 
-
-@app.post(
-    '/download/',
-    response_class=JSONResponse,
-    response_model=Message,
-    tags=['Downloader'],
-    summary='Download a song or songs from a playlist',
-)
+@app.post('/download/', response_class=JSONResponse)
 def download(url: str):
-    """
-    You can download a single song or all the songs in a playlist, album, etc.
-    - **url**: URL of the song or playlist to download.
-    """
-    spotdlc = get_spotdl_instance()
     try:
-        songs = spotdlc.search([url])
-        download_songs_sync(spotdlc, songs)
+        result = subprocess.run(
+            ['python', 'downloader.py', url],
+            capture_output=True, text=True, timeout=180
+        )
+        if result.returncode != 0:
+            return JSONResponse(status_code=500, content={'detail': f"Script error: {result.stderr}"})
+        
+        output = json.loads(result.stdout)
+        if output.get("status") == "error":
+            return JSONResponse(status_code=400, content={'detail': output.get("message")})
+            
         return {'message': 'Download successful'}
-    except Exception as error:  # pragma: no cover
-        import traceback
-        traceback.print_exc()
+    except Exception as error:
         return JSONResponse(status_code=500, content={'detail': str(error)})
 
-
-@app.get(
-    '/list',
-    response_class=HTMLResponse,
-    tags=['Web UI'],
-    summary='List downloaded files',
-)
+@app.get('/list', response_class=HTMLResponse)
 def list_downloads_page(request: Request):
-    files = get_downloaded_files()
-    return templates.TemplateResponse(
-        'list.html', {'request': request, 'files': files}
-    )
+    return templates.TemplateResponse('list.html', {'request': request, 'files': get_downloaded_files()})
 
-
-@app.get(
-    '/list-items',
-    response_class=HTMLResponse,
-    tags=['Web UI'],
-    summary='Returns downloaded files to list',
-)
+@app.get('/list-items', response_class=HTMLResponse)
 def list_items_of_downloads_page():
-    files = get_downloaded_files()
-    return files
+    return get_downloaded_files()
