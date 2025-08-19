@@ -2,7 +2,7 @@ import os
 import uuid
 import shutil
 from datetime import datetime, timedelta
-from urllib.parse import urlparse, quote
+from urllib.parse import urlparse
 from flask import Flask, render_template, request, send_from_directory, flash, redirect, url_for
 from spotdl import Spotdl
 from spotdl.download.downloader import Downloader # Correct import for the downloader class
@@ -89,30 +89,15 @@ def index():
             # 2. The Downloader class handles the actual download process.
             downloader_settings = { "simple_tui": True }
             
-            # Corrected: Parse and URL-encode proxy credentials if they exist
+            # Corrected: Pass the proxy as a dictionary to avoid parsing issues.
             proxy_url_raw = os.environ.get('PROXY_URL')
             if proxy_url_raw:
-                try:
-                    parsed_proxy = urlparse(proxy_url_raw)
-                    if parsed_proxy.username:
-                        encoded_username = quote(parsed_proxy.username)
-                        encoded_password = quote(parsed_proxy.password) if parsed_proxy.password else ''
-                        credentials = f"{encoded_username}"
-                        if encoded_password:
-                            credentials += f":{encoded_password}"
-                        netloc = f"{credentials}@{parsed_proxy.hostname}"
-                        if parsed_proxy.port:
-                            netloc += f":{parsed_proxy.port}"
-                        encoded_proxy_url = parsed_proxy._replace(netloc=netloc).geturl()
-                        downloader_settings["proxy"] = encoded_proxy_url
-                        logging.info(f"Using URL-encoded proxy: {encoded_proxy_url}")
-                    else:
-                        downloader_settings["proxy"] = proxy_url_raw
-                        logging.info(f"Using proxy as-is: {proxy_url_raw}")
-                except Exception:
-                    # Fallback for malformed URLs
-                    downloader_settings["proxy"] = proxy_url_raw
-                    logging.warning(f"Could not parse proxy URL, using raw value: {proxy_url_raw}")
+                logging.info(f"Using proxy: {proxy_url_raw}")
+                # The underlying library (httpx) supports a dictionary format for proxies.
+                downloader_settings["proxies"] = {
+                    "http://": proxy_url_raw,
+                    "https://": proxy_url_raw,
+                }
 
             downloader = Downloader(settings=downloader_settings)
 
@@ -139,7 +124,8 @@ def index():
         except Exception as e:
             logging.error(f"An error occurred during download for session {session_id}: {e}", exc_info=True)
             flash(f'An unexpected error occurred: {e}', 'danger')
-            shutil.rmtree(session_folder)
+            if os.path.exists(session_folder):
+                shutil.rmtree(session_folder)
 
         return redirect(url_for('index'))
 
