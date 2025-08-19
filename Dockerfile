@@ -30,7 +30,7 @@ RUN sed -i 's/\r$//g' entrypoint.sh && chmod +x entrypoint.sh
 
 # Step 2: Install Python dependencies including yt-dlp
 RUN pip install --no-cache-dir --root-user-action ignore -r requirements-app.txt && \
-    pip install --no-cache-dir yt-dlp
+    pip install --no-cache-dir --upgrade spotdl yt-dlp
 
 # Step 3: Create cache directories and symlink ffmpeg
 RUN mkdir -p /.spotdl /.cache && \
