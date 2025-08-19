@@ -24,20 +24,25 @@ if not os.path.exists(DOWNLOAD_FOLDER):
 def get_spotdl_instance():
     """Initializes and returns a Spotdl instance with proxy configuration."""
     proxy_url = os.environ.get('PROXY_URL')
-    # Corrected: Removed the 'ffmpeg' argument as it's no longer supported in the constructor.
-    # spotdl automatically finds ffmpeg if it's in the system's PATH.
-    spotdl_args = {
-        "output": "{title} - {artist}.{output-ext}",
-        "format": "mp3",
-        "log_level": "INFO",
-    }
+    
+    # Initialize Spotdl with only the arguments supported by the constructor.
+    init_args = {}
     if proxy_url:
-        spotdl_args["proxy"] = proxy_url
+        init_args["proxy"] = proxy_url
         logging.info(f"Using proxy: {proxy_url}")
     else:
         logging.warning("No PROXY_URL environment variable found. Running without a proxy.")
         
-    return Spotdl(**spotdl_args)
+    spotdl = Spotdl(**init_args)
+
+    # Configure other settings on the instance's `args` property after initialization.
+    spotdl.args.update({
+        "output": "{title} - {artist}.{output-ext}",
+        "format": "mp3",
+        "log_level": "INFO",
+    })
+        
+    return spotdl
 
 # --- Background Cleanup Scheduler ---
 def cleanup_old_folders():
@@ -87,7 +92,8 @@ def index():
             logging.info(f"Processing URL: {url} in session {session_id}")
             spotdl = get_spotdl_instance()
             
-            # Change output directory for this download
+            # Change output directory for this specific download
+            # This correctly combines the session folder with the output format string
             spotdl.args['output'] = os.path.join(session_folder, spotdl.args['output'])
             
             songs = spotdl.search([url])
